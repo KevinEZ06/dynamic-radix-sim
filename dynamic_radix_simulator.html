@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Radix Simulator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #020617; }
+        @keyframes glowPulse {
+            0% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 0 rgba(52, 211, 153, 0); }
+            50% { transform: translate(-50%, -50%) scale(1.05); box-shadow: 0 0 20px rgba(52, 211, 153, 0.5); }
+            100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 0 rgba(52, 211, 153, 0); }
+        }
+        @keyframes evictDrop {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 1; border-color: #ef4444; }
+            100% { transform: translate(-50%, 50%) scale(0.8) rotate(5deg); opacity: 0; }
+        }
+        .custom-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scroll::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.5); border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        const { useState, useRef, useEffect } = React;
+
+        const Icon = ({ path, className }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} dangerouslySetInnerHTML={{ __html: path }} />
+        );
+        const Zap = (p) => <Icon {...p} path='<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>' />;
+        const HardDrive = (p) => <Icon {...p} path='<line x1="22" y1="12" x2="2" y2="12"></line><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path><line x1="6" y1="16" x2="6.01" y2="16"></line><line x1="10" y1="16" x2="10.01" y2="16"></line>' />;
+        const Maximize = (p) => <Icon {...p} path='<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>' />;
+        const Minimize = (p) => <Icon {...p} path='<path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path>' />;
+        const KeySquare = (p) => <Icon {...p} path='<rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 9-4.8 0"></path><path d="m14.5 9 0 3.5"></path><path d="m18 9 0 2"></path>' />;
+        const Play = (p) => <Icon {...p} path='<polygon points="5 3 19 12 5 21 5 3"></polygon>' />;
+        const Activity = (p) => <Icon {...p} path='<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>' />;
+        const Eraser = (p) => <Icon {...p} path='<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path>' />;
+        const Bomb = (p) => <Icon {...p} path='<circle cx="11" cy="13" r="9"></circle><path d="M14.35 4.65 16.3 2.7m-2.8 1.45 2.5 2.5"></path><path d="m19 2a3 3 0 0 1 3 3"></path>' />;
+        const Trash2 = (p) => <Icon {...p} path='<path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line>' />;
+        const CheckCircle2 = (p) => <Icon {...p} path='<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><path d="m9 11 3 3L22 4"></path>' />;
+        const SquareSquare = (p) => <Icon {...p} path='<rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line>' />;
+
+        const MAX_MEMORY_TOKENS = 150; 
+        const HORIZONTAL_SPACING = 260; 
+        const VERTICAL_SPACING = 160; 
+
+        function DynamicRadixSimulator() {
+            const [nodes, setNodes] = useState({
+                'root': { id: 'root', text: 'ROOT', lock_ref: 0, children: [], parentId: null, lastAccess: Date.now() }
+            });
+            const [requests, setRequests] = useState([]);
+            const [customInput, setCustomInput] = useState("");
+            const [toast, setToast] = useState(null);
+            const [animatingNodes, setAnimatingNodes] = useState(new Set()); 
+            const [evictedGhosts, setEvictedGhosts] = useState([]); 
+            const [demoStep, setDemoStep] = useState(-1);
+            const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
+            const [isFullscreen, setIsFullscreen] = useState(false);
+            
+            const requestsRef = useRef(requests);
+            const containerRef = useRef(null);
+            const nodePositionsRef = useRef({}); 
+
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (e.key === 'Escape' && isFullscreen) setIsFullscreen(false);
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [isFullscreen]);
+
+            useEffect(() => { requestsRef.current = requests; }, [requests]);
+
+            useEffect(() => {
+                if (!containerRef.current) return;
+                const observer = new ResizeObserver((entries) => {
+                    if (entries[0]) {
+                        setContainerSize({ width: entries[0].contentRect.width, height: entries[0].contentRect.height });
+                    }
+                });
+                observer.observe(containerRef.current);
+                return () => observer.disconnect();
+            }, []);
+
+            const showToast = (msg, type = 'info') => {
+                setToast({ msg, type });
+                setTimeout(() => setToast(null), 3000);
+            };
+
+            const calculateNewMemoryNeeded = (currentNodes, textToAdd) => {
+                let currentNodeId = 'root';
+                let remainingText = textToAdd;
+                while (remainingText.length > 0) {
+                    let matchedChildId = null;
+                    let maxMatchLen = 0;
+                    for (let childId of currentNodes[currentNodeId].children) {
+                        const childNode = currentNodes[childId];
+                        let i = 0;
+                        while (i < childNode.text.length && i < remainingText.length && childNode.text[i] === remainingText[i]) i++;
+                        if (i > 0) {
+                            matchedChildId = childId;
+                            maxMatchLen = i;
+                            break; 
+                        }
+                    }
+                    if (matchedChildId) {
+                        const matchedChild = currentNodes[matchedChildId];
+                        if (maxMatchLen === matchedChild.text.length) {
+                            currentNodeId = matchedChildId;
+                            remainingText = remainingText.slice(maxMatchLen);
+                        } else return remainingText.length - maxMatchLen;
+                    } else return remainingText.length;
+                }
+                return 0; 
+            };
+
+            const attemptEviction = (currentNodes, memoryNeeded) => {
+                let freed = 0;
+                let evictedNodesList = [];
+                while (freed < memoryNeeded) {
+                    const parentIds = new Set(Object.values(currentNodes).map(n => n.parentId));
+                    const evictableLeaves = Object.values(currentNodes).filter(n => n.id !== 'root' && n.lock_ref === 0 && !parentIds.has(n.id));
+                    if (evictableLeaves.length === 0) break; 
+                    evictableLeaves.sort((a, b) => a.lastAccess - b.lastAccess);
+                    const toEvict = evictableLeaves[0];
+                    freed += toEvict.text.length;
+                    evictedNodesList.push(toEvict);
+                    if (toEvict.parentId && currentNodes[toEvict.parentId]) {
+                        currentNodes[toEvict.parentId].children = currentNodes[toEvict.parentId].children.filter(id => id !== toEvict.id);
+                    }
+                    delete currentNodes[toEvict.id];
+                }
+                return { freed, evictedNodesList };
+            };
+
+            const insertIntoTree = (currentNodes, reqs, textToAdd) => {
+                let currentNodeId = 'root';
+                let remainingText = textToAdd;
+                let path = ['root'];
+
+                while (remainingText.length > 0) {
+                    let matchedChildId = null;
+                    let maxMatchLen = 0;
+                    for (let childId of currentNodes[currentNodeId].children) {
+                        const childNode = currentNodes[childId];
+                        let i = 0;
+                        while (i < childNode.text.length && i < remainingText.length && childNode.text[i] === remainingText[i]) i++;
+                        if (i > 0) {
+                            matchedChildId = childId;
+                            maxMatchLen = i;
+                            break; 
+                        }
+                    }
+
+                    if (matchedChildId) {
+                        const matchedChild = currentNodes[matchedChildId];
+                        if (maxMatchLen === matchedChild.text.length) {
+                            currentNodeId = matchedChildId;
+                            path.push(currentNodeId);
+                            remainingText = remainingText.slice(maxMatchLen);
+                        } else {
+                            const commonText = matchedChild.text.slice(0, maxMatchLen);
+                            const oldChildRemainingText = matchedChild.text.slice(maxMatchLen);
+                            const newChildRemainingText = remainingText.slice(maxMatchLen);
+                            const splitNodeId = 'node-' + Math.random().toString(36).substr(2, 6);
+                            const newChildId = 'node-' + Math.random().toString(36).substr(2, 6);
+
+                            currentNodes[splitNodeId] = {
+                                id: splitNodeId, text: commonText, lock_ref: matchedChild.lock_ref, 
+                                children: [matchedChild.id], parentId: currentNodeId, lastAccess: Date.now()
+                            };
+
+                            matchedChild.text = oldChildRemainingText;
+                            matchedChild.parentId = splitNodeId;
+
+                            currentNodes[currentNodeId].children = currentNodes[currentNodeId].children.filter(id => id !== matchedChildId);
+                            currentNodes[currentNodeId].children.push(splitNodeId);
+
+                            if (newChildRemainingText.length > 0) {
+                                currentNodes[newChildId] = { id: newChildId, text: newChildRemainingText, lock_ref: 0, children: [], parentId: splitNodeId, lastAccess: Date.now() };
+                                currentNodes[splitNodeId].children.push(newChildId);
+                                currentNodeId = newChildId;
+                                path.push(splitNodeId, newChildId);
+                            } else {
+                                currentNodeId = splitNodeId;
+                                path.push(splitNodeId);
+                            }
+                            remainingText = "";
+                        }
+                    } else {
+                        const newChildId = 'node-' + Math.random().toString(36).substr(2, 6);
+                        currentNodes[newChildId] = { id: newChildId, text: remainingText, lock_ref: 0, children: [], parentId: currentNodeId, lastAccess: Date.now() };
+                        currentNodes[currentNodeId].children.push(newChildId);
+                        currentNodeId = newChildId;
+                        path.push(newChildId);
+                        remainingText = "";
+                    }
+                }
+                return { leafId: currentNodeId, path };
+            };
+
+            const handleAddRequest = (textToAdd) => {
+                if (!textToAdd.trim()) return;
+                const newNodes = JSON.parse(JSON.stringify(nodes));
+                const newRequests = JSON.parse(JSON.stringify(requests));
+                const currentMemory = Object.values(newNodes).reduce((acc, n) => acc + (n.id === 'root' ? 0 : n.text.length), 0);
+                const newMemoryNeeded = calculateNewMemoryNeeded(newNodes, textToAdd);
+                
+                if (currentMemory + newMemoryNeeded > MAX_MEMORY_TOKENS) {
+                    const needed = (currentMemory + newMemoryNeeded) - MAX_MEMORY_TOKENS;
+                    const { freed, evictedNodesList } = attemptEviction(newNodes, needed);
+                    if (freed < needed) {
+                        showToast(`显存不足 (OOM)！可用不足。请结束请求释放锁。`, 'error');
+                        return; 
+                    } else {
+                        showToast(`触发 LRU 淘汰！清理了 ${evictedNodesList.length} 个节点。`, 'warning');
+                        const ghosts = evictedNodesList.map(n => ({ ...n, x: nodePositionsRef.current[n.id]?.x || 200, y: nodePositionsRef.current[n.id]?.y || 200 }));
+                        setEvictedGhosts(prev => [...prev, ...ghosts]);
+                        setTimeout(() => setEvictedGhosts(prev => prev.filter(g => !ghosts.find(gh => gh.id === g.id))), 1200);
+                    }
+                }
+
+                const { leafId, path } = insertIntoTree(newNodes, newRequests, textToAdd);
+                setAnimatingNodes(new Set(path));
+                setTimeout(() => setAnimatingNodes(new Set()), 600);
+
+                const reqId = 'REQ-' + Math.random().toString(36).substr(2, 4).toUpperCase();
+                newRequests.push({ id: reqId, leafId, text: textToAdd, status: 'active' });
+                
+                let curr = leafId;
+                while (curr && curr !== 'root') {
+                    newNodes[curr].lock_ref++;
+                    newNodes[curr].lastAccess = Date.now();
+                    curr = newNodes[curr].parentId;
+                }
+                setNodes(newNodes);
+                setRequests(newRequests);
+                setCustomInput("");
+            };
+
+            const handleFinishRequest = (reqId) => {
+                const newNodes = JSON.parse(JSON.stringify(nodes));
+                const reqIndex = requests.findIndex(r => r.id === reqId);
+                if (reqIndex === -1) return;
+                const req = requests[reqIndex];
+                let curr = req.leafId;
+                while (curr && curr !== 'root') {
+                    if (newNodes[curr]) newNodes[curr].lock_ref = Math.max(0, newNodes[curr].lock_ref - 1);
+                    curr = newNodes[curr].parentId;
+                }
+                const newRequests = [...requests];
+                newRequests.splice(reqIndex, 1);
+                setNodes(newNodes);
+                setRequests(newRequests);
+                showToast(`请求 ${reqId} 已结束，释放原子锁。`, 'success');
+            };
+
+            const handleFinishAllRequests = () => {
+                const newNodes = JSON.parse(JSON.stringify(nodes));
+                requests.forEach(req => {
+                    let curr = req.leafId;
+                    while (curr && curr !== 'root') {
+                        if (newNodes[curr]) newNodes[curr].lock_ref = Math.max(0, newNodes[curr].lock_ref - 1);
+                        curr = newNodes[curr].parentId;
+                    }
+                });
+                setNodes(newNodes);
+                setRequests([]);
+            };
+
+            useEffect(() => {
+                if (demoStep === -1) return;
+                let timer;
+                switch (demoStep) {
+                    case 0:
+                        showToast("【自动演示】开始！清理数据...", "info");
+                        if (requestsRef.current.length > 0) handleFinishAllRequests();
+                        timer = setTimeout(() => setDemoStep(0.5), 1000); break;
+                    case 0.5:
+                        handleFlushCache(); timer = setTimeout(() => setDemoStep(1), 2000); break;
+                    case 1:
+                        showToast("【自动演示】1. 发送请求，占用显存并加锁", "info");
+                        handleAddRequest("SYSTEM: 你是一个AI助手。");
+                        timer = setTimeout(() => setDemoStep(2), 2000); break;
+                    case 2:
+                        showToast("【自动演示】2. 命中公共前缀！零开销复用并分裂", "info");
+                        handleAddRequest("SYSTEM: 你是一个AI助手。\nUSER: 什么是SGLang？");
+                        timer = setTimeout(() => setDemoStep(3), 2500); break;
+                    case 3:
+                        if (requestsRef.current.length > 0) handleFinishRequest(requestsRef.current[0].id);
+                        setTimeout(() => showToast("【自动演示】3. 释放锁变为待命缓存", "info"), 50);
+                        timer = setTimeout(() => setDemoStep(4), 2500); break;
+                    case 4:
+                        handleAddRequest("SYSTEM: 这是一个极其漫长的请求用来快速占用大量显存从而强势触发淘汰。");
+                        timer = setTimeout(() => setDemoStep(5), 4000); break;
+                    case 5:
+                        showToast("【自动演示】4. 任务完毕，释放所有原子锁", "info");
+                        handleFinishAllRequests();
+                        timer = setTimeout(() => setDemoStep(6), 2000); break;
+                    case 6:
+                        handlePruneCached();
+                        timer = setTimeout(() => { showToast("🎉 自动演示完成！", "success"); setDemoStep(-1); }, 3000);
+                        break;
+                }
+                return () => clearTimeout(timer);
+            }, [demoStep]);
+
+            const handlePruneCached = () => {
+                const newNodes = JSON.parse(JSON.stringify(nodes));
+                let totalFreed = 0, evictedList = [], canPrune = true;
+                while(canPrune) {
+                    canPrune = false;
+                    const parentIds = new Set(Object.values(newNodes).map(n => n.parentId));
+                    const evictableLeaves = Object.values(newNodes).filter(n => n.id !== 'root' && n.lock_ref === 0 && !parentIds.has(n.id));
+                    if (evictableLeaves.length > 0) {
+                        canPrune = true;
+                        evictableLeaves.forEach(toEvict => {
+                            totalFreed += toEvict.text.length; evictedList.push(toEvict);
+                            if (toEvict.parentId && newNodes[toEvict.parentId]) {
+                                newNodes[toEvict.parentId].children = newNodes[toEvict.parentId].children.filter(id => id !== toEvict.id);
+                            }
+                            delete newNodes[toEvict.id];
+                        });
+                    }
+                }
+                if (evictedList.length > 0) {
+                    const ghosts = evictedList.map(n => ({ ...n, x: nodePositionsRef.current[n.id]?.x || 200, y: nodePositionsRef.current[n.id]?.y || 200 }));
+                    setEvictedGhosts(prev => [...prev, ...ghosts]);
+                    setTimeout(() => setEvictedGhosts(prev => prev.filter(g => !ghosts.find(gh => gh.id === g.id))), 1200);
+                    showToast(`级联回收 ${evictedList.length} 个闲置节点。`, 'success');
+                    setNodes(newNodes);
+                } else showToast(`当前没有可回收的闲置缓存。`, 'info');
+            };
+
+            const handleFlushCache = () => {
+                if(requests.length > 0) {
+                    showToast("无法清空！当前有活跃请求。", "error"); return;
+                }
+                const ghosts = Object.values(nodes).filter(n => n.id !== 'root').map(n => ({ ...n, x: nodePositionsRef.current[n.id]?.x || 200, y: nodePositionsRef.current[n.id]?.y || 200 }));
+                if (ghosts.length > 0) {
+                    setEvictedGhosts(prev => [...prev, ...ghosts]);
+                    setTimeout(() => setEvictedGhosts(prev => prev.filter(g => !ghosts.find(gh => gh.id === g.id))), 1200);
+                }
+                setNodes({'root': { id: 'root', text: 'ROOT', lock_ref: 0, children: [], parentId: null, lastAccess: Date.now() }});
+                showToast("全局 Flush！基数树已清空！", "warning");
+            };
+
+            const buildTreeLayout = () => {
+                const lNodes = [], lEdges = [];
+                let maxX = 1024, maxY = 576; 
+                
+                const calculateDepthAndLeaf = (nodeId, depth = 0, currentLeafIndex = { val: 0 }) => {
+                    const node = nodes[nodeId];
+                    if (!node) return;
+                    node.depth = depth;
+                    if (node.children.length === 0) node.leafIndex = currentLeafIndex.val++;
+                    else {
+                        let sum = 0;
+                        node.children.forEach(c => { calculateDepthAndLeaf(c, depth + 1, currentLeafIndex); sum += nodes[c].leafIndex; });
+                        node.leafIndex = sum / node.children.length;
+                    }
+                };
+
+                if (nodes['root']) {
+                    calculateDepthAndLeaf('root');
+                    const assignPositions = (node) => {
+                        node.x = node.leafIndex * HORIZONTAL_SPACING + 120;
+                        node.y = node.depth * VERTICAL_SPACING + 70;
+                        maxX = Math.max(maxX, node.x + 200);
+                        maxY = Math.max(maxY, node.y + 150);
+                        nodePositionsRef.current[node.id] = { x: node.x, y: node.y };
+                        lNodes.push({ id: node.id, text: node.text, lock_ref: node.lock_ref, x: node.x, y: node.y, isRoot: node.id === 'root' });
+
+                        node.children.forEach(c => {
+                            const childNode = nodes[c];
+                            if (childNode) {
+                                assignPositions(childNode);
+                                lEdges.push({ src: { x: node.x, y: node.y }, tgt: { x: childNode.x, y: childNode.y }, active: childNode.lock_ref > 0, animating: animatingNodes.has(childNode.id) });
+                            }
+                        });
+                    };
+                    assignPositions(nodes['root']);
+                }
+                return { lNodes, lEdges, maxX, maxY };
+            };
+
+            const { lNodes, lEdges, maxX, maxY } = buildTreeLayout();
+            const currentMemory = Object.values(nodes).reduce((acc, n) => acc + (n.id === 'root' ? 0 : n.text.length), 0);
+            const memoryPercent = Math.min(100, (currentMemory / MAX_MEMORY_TOKENS) * 100);
+
+            const contentWidth = Math.max(1024, maxX);
+            const contentHeight = Math.max(576, maxY);
+            const scaleX = containerSize.width / contentWidth;
+            const scaleY = containerSize.height / contentHeight;
+            const scale = Math.min(scaleX, scaleY, 1); 
+            const translateX = Math.max(0, (containerSize.width - contentWidth * scale) / 2);
+            const translateY = Math.max(0, (containerSize.height - contentHeight * scale) / 2);
+
+            return (
+                <div className={`bg-[#020617] flex items-center justify-center transition-all duration-500 min-h-screen w-full ${isFullscreen ? 'fixed inset-0 z-[100] p-0' : 'p-2 sm:p-4 md:p-6'}`}>
+                    <div className={`flex flex-col w-full bg-[#0B1120] text-slate-200 font-sans select-none shadow-[0_0_60px_rgba(0,0,0,0.5)] overflow-hidden relative transition-all duration-500 ${isFullscreen ? 'h-screen max-w-full rounded-none border-none p-4 sm:p-6' : 'aspect-video max-w-[calc((100vh-3rem)*16/9)] rounded-2xl border border-slate-800 p-4 sm:p-5'}`}>
+                        
+                        <div className="flex justify-between items-end mb-4 border-b border-slate-800 pb-4 shrink-0">
+                            <div>
+                                <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-cyan-400 flex items-center gap-2">
+                                    <Zap className="w-5 h-5 text-emerald-400" />
+                                    Dynamic Radix Engine
+                                </h2>
+                                <p className="text-xs text-slate-500 mt-1">SGLang 核心机制：动态观察 KV Cache 节点分裂与显存淘汰</p>
+                            </div>
+                            <div className="flex items-center gap-4">
+                                <div className="flex flex-col items-end gap-1">
+                                    <div className="flex items-center gap-2 text-xs font-mono">
+                                        <HardDrive className="w-3.5 h-3.5 text-slate-400" />
+                                        <span className={memoryPercent > 90 ? "text-red-400 font-bold" : "text-slate-400"}>显存池: {currentMemory} / {MAX_MEMORY_TOKENS} Tokens</span>
+                                    </div>
+                                    <div className="w-48 h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                                        <div className={`h-full transition-all duration-300 ${memoryPercent > 90 ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-gradient-to-r from-emerald-500 to-cyan-500'}`} style={{ width: `${memoryPercent}%` }} />
+                                    </div>
+                                </div>
+                                <button onClick={() => setIsFullscreen(!isFullscreen)} className="p-2.5 bg-slate-800/80 hover:bg-slate-700 text-slate-400 rounded-xl border border-slate-700 transition-all shadow-[0_0_15px_rgba(0,0,0,0.3)]">
+                                    {isFullscreen ? <Minimize className="w-4.5 h-4.5" /> : <Maximize className="w-4.5 h-4.5" />}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-1 gap-4 overflow-hidden min-h-0">
+                            <div className="w-72 flex flex-col gap-4 shrink-0">
+                                <div className="bg-slate-900/80 rounded-xl p-4 border border-slate-800 flex-1 flex flex-col min-h-0">
+                                    <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center justify-between">
+                                        <span className="flex items-center gap-2"><KeySquare className="w-4 h-4 text-cyan-400" /> 交互控制</span>
+                                        <button onClick={() => setDemoStep(0)} disabled={demoStep !== -1} className="flex items-center gap-1 bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded text-[10px] font-bold transition-all shadow-[0_0_10px_rgba(79,70,229,0.3)]"><Play className="w-3 h-3 fill-current" /> 自动演示</button>
+                                    </h3>
+                                    <div className="flex flex-col gap-2 mb-4 custom-scroll overflow-y-auto pr-1">
+                                        <button onClick={() => handleAddRequest("SYSTEM: 你是一个AI助手。")} className="text-left text-xs bg-slate-800 hover:bg-slate-700 p-2 rounded border border-slate-700">1. SYSTEM: 你是一个AI助手。</button>
+                                        <button onClick={() => handleAddRequest("SYSTEM: 你是一个AI助手。\nUSER: 什么是SGLang？")} className="text-left text-xs bg-slate-800 hover:bg-slate-700 p-2 rounded border border-slate-700">2. ...USER: 什么是SGLang？(分裂)</button>
+                                        <button onClick={() => handleAddRequest("SYSTEM: 你是一个AI助手。\nUSER: 什么是vLLM？")} className="text-left text-xs bg-slate-800 hover:bg-slate-700 p-2 rounded border border-slate-700">3. ...USER: 什么是vLLM？(复用)</button>
+                                        <button onClick={() => handleAddRequest("SYSTEM: 这是一个极其漫长的请求，用来快速占用大量的 KV Cache 空间，从而在显存达到上限时强势触发 Radix Tree 的 LRU 淘汰机制。")} className="text-left text-xs bg-amber-950/50 hover:bg-amber-900 text-amber-200 p-2.5 rounded border border-amber-900">🧨 挤爆显存 (强制触发淘汰)</button>
+                                    </div>
+                                    <div className="mt-auto pt-2 border-t border-slate-800/50">
+                                        <input type="text" value={customInput} onChange={e => setCustomInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddRequest(customInput)} placeholder="输入任意前缀文本..." className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-xs text-slate-200 outline-none focus:border-cyan-500 mb-2" />
+                                        <button onClick={() => handleAddRequest(customInput)} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold py-2.5 rounded shadow-[0_0_15px_rgba(8,145,178,0.3)]">发送请求 (Insert & Split)</button>
+                                    </div>
+                                </div>
+                                <div className="bg-slate-900/80 rounded-xl p-4 border border-slate-800 h-[30%] flex flex-col shrink-0">
+                                    <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center justify-between">
+                                        <span className="flex items-center gap-2"><Activity className="w-4 h-4 text-emerald-400" /> 活跃队列</span>
+                                        <span className="text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-emerald-400 font-mono border border-emerald-900">{requests.length} Running</span>
+                                    </h3>
+                                    <div className="overflow-y-auto flex-1 custom-scroll pr-2 flex flex-col gap-2">
+                                        {requests.length === 0 && <p className="text-xs text-slate-500 text-center mt-4">暂无活跃请求</p>}
+                                        {requests.map(req => (
+                                            <div key={req.id} className="bg-slate-950 border border-slate-700/80 rounded p-2 flex justify-between items-center group">
+                                                <div className="overflow-hidden mr-2">
+                                                    <div className="text-[10px] text-emerald-500 font-bold mb-0.5">{req.id}</div>
+                                                    <div className="text-[10px] text-slate-400 truncate w-32">{req.text}</div>
+                                                </div>
+                                                <button onClick={() => handleFinishRequest(req.id)} className="text-[10px] bg-slate-800 hover:bg-red-900/60 text-slate-300 px-2 py-1.5 rounded transition-all border border-slate-700 whitespace-nowrap">结束释放</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-800 shrink-0">
+                                    <div className="flex gap-2">
+                                        <button onClick={handlePruneCached} className="flex-1 flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-amber-900/40 text-slate-300 text-[11px] py-2 rounded border border-slate-700"><Eraser className="w-3.5 h-3.5" /> 级联回收</button>
+                                        <button onClick={handleFlushCache} className="flex-1 flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-red-900/40 text-slate-300 text-[11px] py-2 rounded border border-slate-700"><Bomb className="w-3.5 h-3.5" /> 全局 Flush</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 bg-slate-900/50 rounded-xl border border-slate-800 relative overflow-hidden flex flex-col">
+                                <div className="absolute top-4 left-4 flex gap-4 bg-slate-950/80 p-2.5 rounded-lg border border-slate-700/60 text-[11px] text-slate-300 z-20 backdrop-blur-md shadow-xl">
+                                    <div className="flex items-center gap-2"><div className="w-3 h-3 bg-emerald-900/60 border border-emerald-500 rounded-sm"></div>活跃 (锁定)</div>
+                                    <div className="flex items-center gap-2"><div className="w-3 h-3 bg-slate-800 border border-slate-500 border-dashed rounded-sm"></div>静默缓存 (待命)</div>
+                                    <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full bg-amber-500/20 border border-amber-500 flex items-center justify-center text-[9px] font-bold text-amber-500">N</div>原子锁 (lock_ref)</div>
+                                </div>
+                                <div className="w-full h-full relative overflow-hidden" ref={containerRef}>
+                                    <div style={{ width: `${contentWidth}px`, height: `${contentHeight}px`, transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`, transformOrigin: 'top left' }} className="absolute top-0 left-0 transition-all duration-500 ease-in-out">
+                                        <svg className="absolute top-0 left-0 w-full h-full pointer-events-none z-0">
+                                            {lEdges.map((edge, i) => (
+                                                <path key={i} d={`M ${edge.src.x} ${edge.src.y} C ${edge.src.x} ${edge.src.y + (edge.tgt.y - edge.src.y) / 2}, ${edge.tgt.x} ${edge.src.y + (edge.tgt.y - edge.src.y) / 2}, ${edge.tgt.x} ${edge.tgt.y}`} fill="none" stroke={edge.animating ? "#34d399" : edge.active ? "#10b981" : "#334155"} strokeWidth={edge.animating ? 4 : edge.active ? 2.5 : 1.5} strokeDasharray={!edge.active ? "5 5" : "none"} className="transition-all duration-500 ease-in-out" />
+                                            ))}
+                                        </svg>
+                                        {lNodes.map((node) => {
+                                            const isRoot = node.isRoot;
+                                            const isActive = node.lock_ref > 0;
+                                            return (
+                                                <div key={node.id} className={`absolute transform -translate-x-1/2 -translate-y-1/2 z-10 transition-all duration-500 ease-in-out ${isRoot ? 'w-20 p-2 rounded-full bg-slate-950 border-2 border-slate-600 text-center shadow-lg' : 'w-52 p-3 rounded-xl'} ${isActive && !isRoot ? 'bg-emerald-950/60 border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.25)]' : ''} ${!isActive && !isRoot ? 'bg-slate-800/80 border-slate-500/80 border-dashed opacity-80' : ''} border-2 backdrop-blur-sm`} style={{ left: node.x, top: node.y, animation: animatingNodes.has(node.id) ? 'glowPulse 0.6s ease-out' : 'none' }}>
+                                                    {!isRoot && (
+                                                        <div className={`absolute -top-3 -right-3 w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold border-2 shadow-md transition-all duration-300 ${isActive ? 'bg-amber-950 border-amber-500 text-amber-400 scale-110' : 'bg-slate-800 border-slate-600 text-slate-400 scale-100'}`}>{node.lock_ref}</div>
+                                                    )}
+                                                    {!isRoot && (
+                                                        <div className="flex flex-col gap-2 h-full">
+                                                            <div className="text-[11px] font-mono whitespace-pre-wrap leading-relaxed text-slate-200 break-words line-clamp-3">{node.text}</div>
+                                                            <div className="mt-auto border-t border-slate-600/50 pt-2 flex justify-between items-center text-[10px]">
+                                                                <span className={isActive ? "text-emerald-400 font-bold" : "text-slate-400"}>{isActive ? '● KV 锁定' : '○ 缓存待命'}</span>
+                                                                <span className="text-slate-400 font-mono bg-slate-900/50 px-1.5 py-0.5 rounded">Len: {node.text.length}</span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {isRoot && <span className="text-[12px] font-bold text-slate-300 tracking-widest">ROOT</span>}
+                                                </div>
+                                            );
+                                        })}
+                                        {evictedGhosts.map((ghost) => (
+                                            <div key={`ghost-${ghost.id}-${Math.random()}`} className="absolute transform -translate-x-1/2 -translate-y-1/2 w-52 rounded-xl p-3 border-2 border-red-500 bg-red-950/95 z-30 pointer-events-none shadow-[0_0_30px_rgba(239,68,68,0.4)]" style={{ left: ghost.x, top: ghost.y, animation: 'evictDrop 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards' }}>
+                                                <div className="flex flex-col gap-2 h-full">
+                                                    <div className="flex items-center justify-between mb-1 border-b border-red-800/50 pb-2">
+                                                        <span className="text-[12px] uppercase font-bold text-red-400 flex items-center gap-1.5"><Trash2 className="w-4 h-4" /> 显存清退</span>
+                                                        <span className="text-[10px] font-mono text-red-300 bg-red-900/80 px-1.5 py-0.5 rounded">- {ghost.text.length}</span>
+                                                    </div>
+                                                    <div className="text-[11px] font-mono whitespace-pre-wrap leading-relaxed text-red-300/70 line-through line-clamp-3">{ghost.text}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {toast && (
+                            <div className={`absolute bottom-8 right-8 px-5 py-3.5 rounded-xl shadow-2xl flex items-center gap-3 z-50 animate-[glowPulse_0.3s_ease-out] backdrop-blur-md ${toast.type === 'error' ? 'bg-red-950/90 border-2 border-red-700 text-red-200' : toast.type === 'warning' ? 'bg-amber-950/90 border-2 border-amber-700 text-amber-200' : 'bg-emerald-950/90 border-2 border-emerald-700 text-emerald-200'}`}>
+                                {toast.type === 'error' ? <SquareSquare className="w-5 h-5" /> : toast.type === 'warning' ? <Trash2 className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+                                <span className="text-sm font-medium tracking-wide">{toast.msg}</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<DynamicRadixSimulator />);
+    </script>
+</body>
+</html>
