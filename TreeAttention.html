@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EAGLE-3 真实引擎逻辑模拟器 (纯手动操控版)</title>
+    <title>EAGLE-3 真实引擎逻辑模拟器 </title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -49,7 +49,7 @@
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        const { useState, useMemo } = React;
+        const { useEffect, useState, useMemo } = React;
 
         const Icon = ({ path, className }) => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} dangerouslySetInnerHTML={{ __html: path }} />;
         const Play = (p) => <Icon {...p} path='<polygon points="5 3 19 12 5 21 5 3"></polygon>' />;
@@ -173,12 +173,29 @@
             }, []);
 
             const [stepIndex, setStepIndex] = useState(0);
+            const [isPlaying, setIsPlaying] = useState(false);
+
+            useEffect(() => {
+                if (!isPlaying) return;
+                if (stepIndex === STATES.length - 1) {
+                    setIsPlaying(false);
+                    return;
+                }
+                const timer = window.setTimeout(() => setStepIndex(index => index + 1), 1300);
+                return () => window.clearTimeout(timer);
+            }, [isPlaying, stepIndex, STATES.length]);
 
             // 从当前帧提取具体的环境状态变量
             const { phase, treeDepth, algoStage, activeRow } = STATES[stepIndex];
+            const activeMaskNode = phase === 3 ? VALID_NODES[activeRow] : null;
+            const activeMaskKeys = activeMaskNode ? TREE_MASK[activeRow]
+                .map((value, index) => value === 1 ? VALID_NODES[index] : null)
+                .filter(Boolean) : [];
+            const activePrediction = activeMaskNode ? TARGET_PREDICTIONS.find(pred => pred.sourceId === activeMaskNode.id) : null;
+            const activeMaskAccepted = activeMaskNode && ['n1', 'n4', 'n7'].includes(activeMaskNode.id);
 
             const batchCenterX = phase === 1 
-                ? (treeDepth === 1 ? 220 : treeDepth === 2 ? 430 : 640) 
+                ? (treeDepth === 1 ? 260 : treeDepth === 2 ? 430 : 640)
                 : 400;
 
             // 纯手动步进控制函数
@@ -191,6 +208,7 @@
             };
 
             const resetStep = () => {
+                setIsPlaying(false);
                 setStepIndex(0);
             };
 
@@ -424,46 +442,12 @@
                     </div>
 
                     <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 h-[82vh]">
-                        <div className="xl:col-span-7 bg-slate-900/50 border border-slate-800 rounded-2xl p-5 relative overflow-hidden flex flex-col shadow-xl">
+                        <div className="xl:col-span-6 bg-slate-900/50 border border-slate-800 rounded-2xl p-5 relative overflow-hidden flex flex-col shadow-xl">
                             <h2 className="text-lg font-bold text-slate-300 uppercase tracking-widest flex items-center gap-2 mb-4 border-b border-slate-800 pb-2 shrink-0">
                                 <GitBranch className="w-6 h-6 text-violet-400" /> 1. 自回归流水线并行拓展与显存变换
                             </h2>
-                            <div className="flex-1 relative bg-slate-950/50 rounded-xl border border-slate-800/50 overflow-hidden flex items-center justify-center min-h-[760px]">
-                                
-                               {phase === 1 && (
-                                   <div className="absolute bottom-4 right-4 w-[430px] bg-slate-900/90 border-2 border-violet-500/50 p-5 rounded-2xl shadow-[0_0_30px_rgba(139,92,246,0.3)] z-50 animate-[slideInRight_0.4s_ease-out]">
-                                       <h4 className="font-bold text-violet-300 mb-3 flex items-center justify-between gap-2 border-b border-violet-800/50 pb-2 text-base">
-                                           <span className="flex items-center gap-2"><Code className="w-6 h-6 text-violet-400"/> Depth: {treeDepth} 引擎推演中</span>
-                                           <span className="text-xs bg-red-900/40 border border-red-500/50 px-2.5 py-1 rounded text-red-200">τ=0.05</span>
-                                       </h4>
-                                       
-                                       <ul className="space-y-1.5 text-slate-300 font-mono text-[14px] leading-relaxed mb-3">
-                                           <li className={`transition-all duration-300 flex items-center gap-2 ${algoStage === 1 ? "text-cyan-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
-                                               <span className="w-5 h-5 rounded-full bg-cyan-900 flex items-center justify-center text-cyan-400 shrink-0 text-[12px]">1</span> Tensor Alignment
-                                           </li>
-                                           <li className={`transition-all duration-300 flex items-center gap-2 ${algoStage === 2 ? "text-indigo-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
-                                               <span className="w-5 h-5 rounded-full bg-indigo-900 flex items-center justify-center text-indigo-400 shrink-0 text-[12px]">2</span> MLP Mapping
-                                           </li>
-                                           <li className={`transition-all duration-300 flex items-center gap-2 ${algoStage === 3 ? "text-purple-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
-                                               <span className="w-5 h-5 rounded-full bg-purple-900 flex items-center justify-center text-purple-400 shrink-0 text-[12px]">3</span> Parallel Mapping
-                                           </li>
-                                           <li className={`transition-all duration-300 flex items-center gap-2 ${algoStage === 4 ? "text-amber-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
-                                               <span className="w-5 h-5 rounded-full bg-amber-900 flex items-center justify-center text-amber-400 shrink-0 text-[12px]">4</span> Batch Sample
-                                           </li>
-                                           <li className={`transition-all duration-300 flex items-center gap-2 ${algoStage === 5 ? "text-pink-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
-                                               <span className="w-5 h-5 rounded-full bg-pink-900 flex items-center justify-center text-pink-400 shrink-0 text-[12px]">5</span> Global Prune
-                                           </li>
-                                           <li className={`transition-all duration-300 flex items-center gap-2 ${algoStage === 6 ? "text-emerald-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
-                                               <span className="w-5 h-5 rounded-full bg-emerald-900 flex items-center justify-center text-emerald-400 shrink-0 text-[12px]">6</span> Update KVCache
-                                           </li>
-                                       </ul>
-
-                                       <div className="bg-slate-950 p-3.5 rounded-lg border border-slate-700/50 text-[14px] text-slate-400 leading-relaxed min-h-[75px] flex items-center shadow-inner">
-                                           {getAlgoDetailText()}
-                                       </div>
-                                   </div>
-                               )}
-
+                            <div className="flex-1 bg-slate-950/50 rounded-xl border border-slate-800/50 overflow-x-auto overflow-y-hidden min-h-[760px] custom-scrollbar">
+                                <div className="relative min-w-[820px] min-h-[760px] h-full">
                                <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
                                    {renderTreeEdges()}
                                </svg>
@@ -518,10 +502,11 @@
                                })}
 
                                {renderMicroActionPipeline()}
+                                </div>
                             </div>
                         </div>
 
-                        <div className="xl:col-span-5 flex flex-col gap-6 h-full overflow-y-auto custom-scrollbar pr-1">
+                        <div className="xl:col-span-6 grid grid-rows-[auto_minmax(0,1fr)] gap-6 h-full min-h-0">
                             <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex flex-col gap-3 shrink-0 shadow-lg">
                                 <div className="flex items-center justify-between">
                                     <h3 className="text-base font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -534,7 +519,11 @@
                                             STEP: {stepIndex}/{STATES.length - 1}
                                         </div>
                                         <div className="h-5 w-px bg-slate-800 hidden lg:block"></div>
-                                        
+
+                                        <button onClick={() => setIsPlaying(playing => !playing)} disabled={stepIndex === STATES.length - 1} className={`px-3 py-1.5 text-sm font-mono font-bold rounded-lg flex items-center gap-1 transition-all ${stepIndex < STATES.length - 1 ? isPlaying ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-[0_0_15px_rgba(217,119,6,0.3)]' : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-[0_0_15px_rgba(8,145,178,0.3)]' : 'bg-slate-900 text-slate-700 cursor-not-allowed'}`}>
+                                            <Play className="w-4 h-4" /> {isPlaying ? '暂停' : '慢速播放'}
+                                        </button>
+
                                         <button onClick={prevStep} disabled={stepIndex === 0} className={`px-3 py-1.5 text-sm font-mono font-bold rounded-lg flex items-center gap-1 transition-all ${stepIndex > 0 ? 'bg-slate-800 hover:bg-slate-700 text-white shadow-lg' : 'bg-slate-900 text-slate-700 cursor-not-allowed'}`}>
                                             <ChevronLeft className="w-4 h-4" /> 上一步
                                         </button>
@@ -567,31 +556,58 @@
                                         );
                                     })}
                                 </div>
+
+                                {phase === 1 && (
+                                    <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 bg-slate-950/70 border border-violet-500/40 p-3 rounded-xl animate-[slideInRight_0.4s_ease-out]">
+                                        <div className="col-span-2 flex items-center justify-between gap-3 border-b border-violet-800/50 pb-2">
+                                            <span className="font-bold text-sm text-violet-300 flex items-center gap-1.5"><Code className="w-5 h-5 text-violet-400" /> Depth: {treeDepth} 引擎推演中</span>
+                                            <span className="text-[10px] bg-red-900/40 border border-red-500/50 px-2 py-0.5 rounded text-red-200">τ=0.05</span>
+                                        </div>
+                                        <ol className="grid grid-cols-2 xl:grid-cols-3 gap-x-4 gap-y-1 text-[11px] font-mono text-slate-300">
+                                            {[
+                                                { label: 'Tensor Alignment', active: 'text-cyan-300 font-bold', badge: 'bg-cyan-900 text-cyan-400' },
+                                                { label: 'MLP Mapping', active: 'text-indigo-300 font-bold', badge: 'bg-indigo-900 text-indigo-400' },
+                                                { label: 'Parallel Mapping', active: 'text-purple-300 font-bold', badge: 'bg-purple-900 text-purple-400' },
+                                                { label: 'Batch Sample', active: 'text-amber-300 font-bold', badge: 'bg-amber-900 text-amber-400' },
+                                                { label: 'Global Prune', active: 'text-pink-300 font-bold', badge: 'bg-pink-900 text-pink-400' },
+                                                { label: 'Update KVCache', active: 'text-emerald-300 font-bold', badge: 'bg-emerald-900 text-emerald-400' }
+                                            ].map(({ label, active, badge }, index) => (
+                                                <li key={label} className={`flex items-center gap-1.5 transition-all duration-300 ${algoStage === index + 1 ? active : 'opacity-40'}`}>
+                                                    <span className={`w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-[10px] ${badge}`}>{index + 1}</span>{label}
+                                                </li>
+                                            ))}
+                                        </ol>
+                                        <div className="col-span-2 bg-slate-900 border border-slate-700/50 px-3 py-2 rounded-lg text-xs text-slate-400 leading-snug">
+                                            {getAlgoDetailText()}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
-                            <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 flex flex-col flex-1 min-h-[340px]">
+                            <div className="grid grid-cols-1 xl:grid-cols-10 gap-6 min-h-0">
+                            <div className="xl:col-span-6 bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex flex-col min-h-0 h-full">
                                 <h3 className="text-base font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5 mb-3 border-b border-slate-800 pb-2">
                                     <Hash className="w-5 h-5 text-purple-400" /> 2. SGLang 融合树注意力掩码 (Tree Attention Mask)
                                 </h3>
-                                
-                                <div className="flex-1 flex flex-col justify-center items-center bg-slate-950/60 rounded-xl border border-slate-900 p-4">
+
+                                <div className="flex-1 min-h-0 overflow-auto custom-scrollbar flex flex-col justify-center items-center bg-slate-950/60 rounded-xl border border-slate-900 p-3">
                                     {phase < 3 ? (
                                         <div className="text-sm text-slate-600 font-mono italic animate-pulse">等待拓扑流打平后激活 Tree Attention 拓扑扫描...</div>
                                     ) : (
-                                        <div className="w-full flex flex-col items-center animate-[slideInRight_0.4s_ease-out]">
-                                            <div className="flex w-full max-w-[560px] mb-2 pl-16">
+                                        <div className="w-full min-w-[420px] flex flex-col items-center animate-[slideInRight_0.4s_ease-out]">
+                                            <div className="flex w-full max-w-[680px] mb-3 pl-20">
                                                 {VALID_NODES.map((n) => (
                                                     <span key={`col-h-${n.id}`} className="flex-1 text-center font-mono text-[14px] text-slate-500 font-bold">{n.id}</span>
                                                 ))}
                                             </div>
 
-                                            <div className="w-full max-w-[560px] space-y-2">
+                                            <div className="w-full max-w-[680px] space-y-2">
                                                 {TREE_MASK.map((row, rIdx) => {
                                                     const isScanning = phase === 3 && activeRow === rIdx;
                                                     return (
                                                         <div key={`row-${rIdx}`} className={`flex items-center rounded transition-colors duration-300 p-1 ${isScanning ? 'bg-purple-900/30 ring-1 ring-purple-500/50' : ''}`}>
-                                                            <span className="w-16 text-right pr-4 font-mono text-[14px] text-slate-400 font-bold truncate">{VALID_NODES[rIdx].id}</span>
-                                                            
+                                                            <span className="w-20 text-right pr-4 font-mono text-[15px] text-slate-400 font-bold truncate">{VALID_NODES[rIdx].id}</span>
+
                                                             <div className="flex-1 flex gap-2">
                                                                 {row.map((val, cIdx) => {
                                                                     let cellClass = "bg-slate-900 border-slate-800 text-slate-700";
@@ -610,11 +626,19 @@
                                                 })}
                                             </div>
                                             
-                                            <div className="mt-5 text-sm font-mono text-slate-400 w-full max-w-[560px] text-center bg-slate-900/60 border border-slate-800/80 p-3 rounded-lg">
+                                            <div className="mt-5 text-sm font-mono text-slate-400 w-full max-w-[680px] bg-slate-900/60 border border-slate-800/80 p-3 rounded-lg">
                                                 {phase === 3 ? (
-                                                    <span className="text-purple-300 animate-pulse flex items-center justify-center gap-1.5">
-                                                        <Zap className="w-4 h-4 text-purple-400"/> 硬件融合算子正在并发扫描行位置: Row {activeRow}
-                                                    </span>
+                                                    <div className="space-y-2 animate-[slideInRight_0.3s_ease-out]">
+                                                        <div className="text-purple-300 font-bold flex items-center gap-1.5">
+                                                            <Zap className="w-4 h-4 text-purple-400"/> Row {activeRow}: Query [{activeMaskNode.id}] “{activeMaskNode.text}”
+                                                        </div>
+                                                        <div className="text-slate-300 leading-relaxed">
+                                                            Mask 中的 <span className="text-purple-300 font-bold">1</span> 仅保留祖先与自身：{activeMaskKeys.map(node => `${node.id} (${node.text})`).join(' → ')}。因此该 Query 只读取同一路径 KV-Cache，隔离其他草稿分支。
+                                                        </div>
+                                                        <div className={`border-l-2 pl-3 ${activeMaskAccepted ? 'border-emerald-500 text-emerald-300' : 'border-red-500 text-red-300'}`}>
+                                                            验证对应：[{activeMaskNode.id}] → Target “{activePrediction?.target ?? '无候选'}” (p={activePrediction?.prob ?? '—'})，{activeMaskAccepted ? '属于 root → n1 → n4 → n7 接收路径，验证后保留。' : '不属于最终接收路径，验证后拒绝。'}
+                                                        </div>
+                                                    </div>
                                                 ) : (
                                                     <span>树依赖已静态编译为一维 Mask。多路独立分支在单次 Forward 中完全并行且互不干扰。</span>
                                                 )}
@@ -624,23 +648,24 @@
                                 </div>
                             </div>
 
-                            <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex flex-col shrink-0">
+                            <div className="xl:col-span-4 bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex flex-col min-h-0 h-full">
                                 <h3 className="text-base font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5 mb-2 border-b border-slate-800 pb-2">
                                     <CheckCircle2 className="w-5 h-5 text-amber-400" /> 3. 目标模型验证与树路径接收
                                 </h3>
-                                
-                                <div className="space-y-2 max-h-[170px] overflow-y-auto custom-scrollbar font-mono text-sm bg-slate-950/70 p-3.5 rounded-xl border border-slate-900">
-                                    {phase < 4 ? (
-                                        <div className="text-slate-600 italic animate-pulse">等待大模型验证算子执行校验...</div>
+
+                                <div className="flex-1 min-h-0 space-y-2 overflow-y-auto custom-scrollbar font-mono text-sm bg-slate-950/70 p-3.5 rounded-xl border border-slate-900">
+                                    {phase < 3 ? (
+                                        <div className="text-slate-600 italic animate-pulse">等待树注意力掩码拓扑扫描...</div>
                                     ) : (
                                         <div className="space-y-2.5">
                                             {TARGET_PREDICTIONS.map((pred, pIdx) => {
                                                 const sourceNode = VALID_NODES.find(n => n.id === pred.sourceId);
                                                 const isSuccessPath = ['n1', 'n4', 'n7'].includes(pred.sourceId);
+                                                const isActiveMaskPrediction = phase === 3 && pred.sourceId === activeMaskNode?.id;
                                                 const showMatch = phase >= 5 || (phase === 4 && pIdx <= 3);
-                                                
+
                                                 return (
-                                                    <div key={pIdx} className="flex justify-between items-center border-b border-slate-900/50 pb-1 animate-[slideInRight_0.3s_ease-out]">
+                                                    <div key={pIdx} className={`flex justify-between items-center border-b pb-1 animate-[slideInRight_0.3s_ease-out] ${isActiveMaskPrediction ? 'bg-purple-900/30 border-purple-500/60 ring-1 ring-purple-500/40 px-2 rounded' : 'border-slate-900/50'}`}>
                                                         <div className="flex items-center gap-1.5 truncate max-w-[75%]">
                                                             <span className="text-slate-500">[{pred.sourceId}]</span>
                                                             <span className="text-slate-300 font-bold">"{sourceNode?.text}"</span>
@@ -649,7 +674,9 @@
                                                             <span className="text-white font-bold">"{pred.target || pred.text}"</span>
                                                         </div>
                                                         
-                                                        {showMatch ? (
+                                                        {isActiveMaskPrediction ? (
+                                                            <span className="text-[10px] bg-purple-950 text-purple-300 font-bold px-1.5 py-0.5 rounded border border-purple-500 flex items-center gap-0.5">ROW {activeRow}</span>
+                                                        ) : showMatch ? (
                                                             isSuccessPath ? (
                                                                 <span className="text-[12px] bg-emerald-950 text-emerald-400 font-bold px-2 py-0.5 rounded border border-emerald-800 flex items-center gap-0.5">
                                                                     <CheckCircle2 className="w-3 h-3"/> ACCEPT
@@ -679,6 +706,7 @@
                                         </div>
                                     )}
                                 </div>
+                            </div>
                             </div>
                         </div>
                     </div>
