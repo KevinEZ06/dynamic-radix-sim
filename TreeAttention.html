@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EAGLE-3 Attention 矩阵模拟器</title>
+    <title>EAGLE-3 真实引擎逻辑模拟器 (淘汰阴影区分版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -14,28 +14,66 @@
         
         @keyframes glowCell {
             0% { box-shadow: inset 0 0 0 rgba(139, 92, 246, 0); background-color: rgba(30, 41, 59, 0.5); }
-            50% { box-shadow: inset 0 0 20px rgba(139, 92, 246, 0.8); background-color: rgba(139, 92, 246, 0.3); border-color: #a78bfa; }
+            50% { box-shadow: inset 0 0 25px rgba(139, 92, 246, 0.9); background-color: rgba(139, 92, 246, 0.4); border-color: #a78bfa; }
             100% { box-shadow: inset 0 0 0 rgba(139, 92, 246, 0); background-color: rgba(30, 41, 59, 0.5); }
         }
         @keyframes shatter {
-            0% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }
-            100% { transform: translate(-50%, 40px) scale(0.6) rotate(15deg); opacity: 0; }
+            0% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; filter: grayscale(0%); }
+            20% { transform: translate(-50%, -50%) scale(1.1) rotate(-5deg); opacity: 1; filter: grayscale(50%); border-color: #ef4444; }
+            100% { transform: translate(-50%, 60px) scale(0.5) rotate(25deg); opacity: 0; filter: grayscale(100%); }
         }
-        @keyframes fadeOut { 100% { opacity: 0; } }
-        @keyframes popIn { 0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; } 100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
-        @keyframes slideInRight { 0% { transform: translateX(20px); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
-        .custom-scrollbar::-webkit-scrollbar { height: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        @keyframes pruneDead {
+            0% { transform: translate(-50%, -50%) scale(1.1); border-color: #ef4444; }
+            100% { transform: translate(-50%, -50%) scale(0.95); opacity: 0.7; }
+        }
+        @keyframes fadeOut { 
+            0% { opacity: 1; } 
+            100% { opacity: 0; } 
+        }
+        @keyframes popInFaint { 
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; } 
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 0.8; } 
+        }
+        @keyframes popInSolid { 
+            0% { transform: translate(-50%, -50%) scale(0.9); opacity: 0.6; } 
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } 
+        }
+        @keyframes pulseBorder {
+            0% { border-color: rgba(34, 211, 238, 0.3); box-shadow: 0 0 0 rgba(34, 211, 238, 0); }
+            50% { border-color: rgba(34, 211, 238, 1); box-shadow: 0 0 20px rgba(34, 211, 238, 0.6); }
+            100% { border-color: rgba(34, 211, 238, 0.3); box-shadow: 0 0 0 rgba(34, 211, 238, 0); }
+        }
+        @keyframes saveToCache {
+            0% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 0 rgba(16, 185, 129, 0); border-color: #a78bfa; }
+            50% { transform: translate(-50%, -50%) scale(1.05); box-shadow: 0 0 30px rgba(16, 185, 129, 0.8); border-color: #34d399; background-color: rgba(6, 78, 59, 0.8); }
+            100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 15px rgba(16, 185, 129, 0.3); border-color: #10b981; }
+        }
+        @keyframes slideInRight { 0% { transform: translateX(30px); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+        
+        /* 核心追加：废弃节点的斜线阴影背景 */
+        .bg-striped-dead {
+            background-image: repeating-linear-gradient(
+                -45deg,
+                rgba(239, 68, 68, 0.15) 0px,
+                rgba(239, 68, 68, 0.15) 8px,
+                rgba(15, 23, 42, 0.9) 8px,
+                rgba(15, 23, 42, 0.9) 16px
+            );
+            border-color: rgba(239, 68, 68, 0.4);
+            color: rgba(239, 68, 68, 0.6);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { height: 10px; width: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; border-radius: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 5px; border: 2px solid #0f172a; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
-        // Inline SVGs
         const Icon = ({ path, className }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} dangerouslySetInnerHTML={{ __html: path }} />
         );
@@ -47,51 +85,94 @@
         const GitBranch = (p) => <Icon {...p} path='<line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>' />;
         const Layers = (p) => <Icon {...p} path='<polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline>' />;
         const Hash = (p) => <Icon {...p} path='<line x1="4" y1="9" x2="20" y2="9"></line><line x1="4" y1="15" x2="20" y2="15"></line><line x1="10" y1="3" x2="8" y2="21"></line><line x1="16" y1="3" x2="14" y2="21"></line>' />;
+        const Code = (p) => <Icon {...p} path='<polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline>' />;
+        const Database = (p) => <Icon {...p} path='<ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>' />;
 
         function EagleSpeculativeSimulator() {
             const [phase, setPhase] = useState(0); 
             const [isAutoPlay, setIsAutoPlay] = useState(false);
             const [activeRow, setActiveRow] = useState(-1);
+            
+            const [treeDepth, setTreeDepth] = useState(0);
+            const [algoStage, setAlgoStage] = useState(0); 
 
-            const ROOT_NODE = { id: 'root', text: 'SGLang is', x: 120, y: 225 };
+            const THRESHOLD = 0.05;
 
-            const DRAFT_NODES = [
-                { id: 'n1', text: 'designed', parent: 'root', x: 340, y: 100 },
-                { id: 'n2', text: 'built',    parent: 'root', x: 340, y: 225 },
-                { id: 'n3', text: 'a',        parent: 'root', x: 340, y: 350 },
-                { id: 'n4', text: 'for',      parent: 'n1',   x: 560, y: 100 },
-                { id: 'n5', text: 'LLMs',     parent: 'n4',   x: 780, y: 100 },
-                { id: 'n6', text: 'fast',     parent: 'n3',   x: 560, y: 350 },
+            const ROOT_NODE = { id: 'root', text: 'SGLang is', x: 80, y: 190 };
+
+            const ALL_DRAFT_NODES = [
+                { id: 'n1', text: 'designed', parent: 'root', x: 310, y: 70,  depth: 1, isDummy: false, prob: 0.45 },
+                { id: 'n2', text: 'built',    parent: 'root', x: 310, y: 190, depth: 1, isDummy: false, prob: 0.35 },
+                { id: 'n3', text: 'a',        parent: 'root', x: 310, y: 310, depth: 1, isDummy: false, prob: 0.15 },
+                { id: 'd1', text: 'used',     parent: 'root', x: 310, y: 430, depth: 1, isDummy: true,  prob: 0.02 },
+
+                { id: 'n4', text: 'for',      parent: 'n1',   x: 550, y: 70,  depth: 2, isDummy: false, prob: 0.78 },
+                { id: 'n5', text: 'with',     parent: 'n2',   x: 550, y: 170, depth: 2, isDummy: false, prob: 0.65 }, 
+                { id: 'd2', text: 'by',       parent: 'n2',   x: 550, y: 240, depth: 2, isDummy: true,  prob: 0.04 }, 
+                { id: 'n6', text: 'fast',     parent: 'n3',   x: 550, y: 310, depth: 2, isDummy: false, prob: 0.60 }, 
+
+                { id: 'n7', text: 'LLMs',     parent: 'n4',   x: 790, y: 70,  depth: 3, isDummy: false, prob: 0.88 },
+                { id: 'd3', text: 'in',       parent: 'n5',   x: 790, y: 170, depth: 3, isDummy: true,  prob: 0.03 }, 
             ];
 
-            const TREE_MASK = [
-                [1, 0, 0, 0, 0, 0],
-                [0, 1, 0, 0, 0, 0],
-                [0, 0, 1, 0, 0, 0],
-                [1, 0, 0, 1, 0, 0],
-                [1, 0, 0, 1, 1, 0],
-                [0, 0, 1, 0, 0, 1],
-            ];
+            const VALID_NODES = ALL_DRAFT_NODES.filter(n => !n.isDummy);
+
+            const TREE_MASK = useMemo(() => {
+                return VALID_NODES.map(rowNode => {
+                    return VALID_NODES.map(colNode => {
+                        let current = rowNode.id;
+                        while (current !== 'root') {
+                            if (current === colNode.id) return 1; 
+                            const nodeInfo = VALID_NODES.find(n => n.id === current);
+                            if (!nodeInfo) break;
+                            current = nodeInfo.parent;
+                        }
+                        return 0; 
+                    });
+                });
+            }, [VALID_NODES]);
 
             const TARGET_PREDICTIONS = [
                 { sourceId: 'n1', target: 'for', prob: 0.98 },
-                { sourceId: 'n2', target: 'with', prob: 0.65 },
-                { sourceId: 'n3', target: 'fast', prob: 0.88 },
+                { sourceId: 'n2', target: 'with', prob: 0.40 }, 
+                { sourceId: 'n3', target: 'fast', prob: 0.12 }, 
                 { sourceId: 'n4', target: 'LLMs', prob: 0.99 },
-                { sourceId: 'n5', target: '.', prob: 0.85 },
-                { sourceId: 'n6', target: 'engine', prob: 0.70 },
+                { sourceId: 'n5', target: 'memory', prob: 0.25 },
+                { sourceId: 'n6', target: 'engine', prob: 0.05 },
+                { sourceId: 'n7', target: '.', prob: 0.85 },
             ];
 
             useEffect(() => {
                 let timer;
+                let algoInterval;
+                
                 if (phase === 1) {
-                    timer = setTimeout(() => setPhase(2), 1500);
+                    let cDepth = 1;
+                    let cStage = 1;
+                    setTreeDepth(cDepth);
+                    setAlgoStage(cStage);
+
+                    algoInterval = setInterval(() => {
+                        if (cStage === 4) {
+                            if (cDepth === 3) {
+                                clearInterval(algoInterval);
+                                timer = setTimeout(() => setPhase(2), 2000);
+                            } else {
+                                cDepth++;
+                                cStage = 1;
+                            }
+                        } else {
+                            cStage++;
+                        }
+                        setTreeDepth(cDepth);
+                        setAlgoStage(cStage);
+                    }, 3000); 
                 } else if (phase === 2) {
-                    timer = setTimeout(() => setPhase(3), 2000);
+                    timer = setTimeout(() => setPhase(3), 3000);
                 } else if (phase === 3) {
                     let row = 0;
                     const scanInterval = setInterval(() => {
-                        if (row < 6) {
+                        if (row < VALID_NODES.length) { 
                             setActiveRow(row);
                             row++;
                         } else {
@@ -99,42 +180,100 @@
                             setActiveRow(-1);
                             setPhase(4);
                         }
-                    }, 500);
-                    return () => clearInterval(scanInterval);
+                    }, 700); 
+                    return () => {
+                        clearInterval(scanInterval);
+                        clearInterval(algoInterval);
+                    };
                 } else if (phase === 4) {
-                    timer = setTimeout(() => setPhase(5), 2000);
+                    timer = setTimeout(() => setPhase(5), 3000);
                 } else if (phase === 5 && isAutoPlay) {
-                    timer = setTimeout(() => setPhase(0), 4500);
+                    timer = setTimeout(() => setPhase(0), 5000);
                 }
-                return () => clearTimeout(timer);
-            }, [phase, isAutoPlay]);
+                
+                return () => {
+                    clearTimeout(timer);
+                    clearInterval(algoInterval);
+                };
+            }, [phase, isAutoPlay, VALID_NODES.length]);
 
             const triggerSpeculation = () => {
                 if (phase === 0 || phase === 5) setPhase(1);
             };
 
+            const isParentOfCurrentDepth = (nodeId) => {
+                if (treeDepth === 1 && nodeId === 'root') return true;
+                if (treeDepth === 2 && ['n1', 'n2', 'n3'].includes(nodeId)) return true; 
+                if (treeDepth === 3 && ['n4', 'n5', 'n6'].includes(nodeId)) return true; 
+                return false;
+            };
+
+            const getAlgoDetailText = () => {
+                if (phase !== 1) return "";
+                const parents = treeDepth === 1 ? "Root" : treeDepth === 2 ? "n1, n2, n3 同步并行" : "n4, n5, n6 同步并行";
+                if (algoStage === 1) return `【真实批处理】锁定基准 [${parents}]，打包送入 Draft_Head 并行提取特征 f。`;
+                if (algoStage === 2) return `预测头对所有基准节点计算概率分布，批量拉出各自最可能出现的 Top-K 候选词。`;
+                if (algoStage === 3) return `【全局剪枝】对比阈值 τ=0.05。低于阈值的废弃节点，将被彻底打上淘汰阴影，无缘 Cache。`;
+                if (algoStage === 4) return `保留高质量分支，计算它们独立分支路线的 KVCache，供下一层继续裂变调用。`;
+                return "";
+            };
+
             const renderTreeEdges = () => {
-                return DRAFT_NODES.map((node) => {
+                return ALL_DRAFT_NODES.map((node) => {
+                    if (phase === 1) {
+                        if (node.depth > treeDepth) return null;
+                        if (node.depth === treeDepth && algoStage < 2) return null;
+                    }
+
                     const isRootParent = node.parent === 'root';
-                    const parentNode = isRootParent ? ROOT_NODE : DRAFT_NODES.find(n => n.id === node.parent);
+                    const parentNode = isRootParent ? ROOT_NODE : ALL_DRAFT_NODES.find(n => n.id === node.parent);
                     if (!parentNode) return null;
 
-                    const isRejected = phase === 5 && !['n1', 'n4', 'n5'].includes(node.id);
+                    const isRejected = phase === 5 && !['n1', 'n4', 'n7'].includes(node.id);
                     const isAccepted = phase === 5 && !isRejected;
 
                     let strokeColor = '#475569';
                     let strokeDash = 'none';
-                    if (isAccepted) strokeColor = '#10b981';
-                    if (isRejected) { strokeColor = '#ef4444'; strokeDash = '5,5'; }
+                    let strokeWidthValue = 2; 
+                    let lineClasses = "transition-all duration-1000";
 
-                    const startX = isRootParent ? parentNode.x + 60 : parentNode.x + 30;
+                    if (phase === 1) {
+                        if (node.depth < treeDepth && node.isDummy) {
+                            // 历史淘汰节点的连线：暗红虚线
+                            strokeColor = 'rgba(239, 68, 68, 0.3)';
+                            strokeDash = '4,4';
+                        } else if (node.depth === treeDepth) {
+                            if (algoStage === 2) { strokeDash = '5,5'; strokeColor = '#fbbf24'; }
+                            if (algoStage === 3 && node.isDummy) { strokeColor = '#ef4444'; strokeDash = '4,4'; }
+                            if (algoStage === 4) {
+                                if (node.isDummy) { strokeColor = 'rgba(239, 68, 68, 0.3)'; strokeDash = '4,4'; }
+                                else { strokeColor = '#10b981'; }
+                            }
+                        }
+                    } else {
+                        if (node.isDummy) {
+                            strokeColor = 'rgba(239, 68, 68, 0.2)';
+                            strokeDash = '4,4';
+                        } else {
+                            if (isAccepted) strokeColor = '#10b981';
+                            if (isRejected && phase === 5) { 
+                                strokeColor = '#ef4444'; 
+                                strokeDash = '5,5'; 
+                                lineClasses += ' animate-[fadeOut_2s_forwards]'; // Target验证淘汰的分支彻底消失
+                            }
+                        }
+                    }
+
+                    const startX = isRootParent ? parentNode.x + 70 : parentNode.x + 45;
+                    const isThick = isAccepted || (phase === 1 && algoStage === 4 && node.depth === treeDepth && !node.isDummy);
+                    strokeWidthValue = isThick ? 4 : 2; 
 
                     return (
                         <path
                             key={`edge-${node.id}`}
-                            d={`M ${startX} ${parentNode.y} C ${startX + 40} ${parentNode.y}, ${node.x - 40} ${node.y}, ${node.x - 30} ${node.y}`}
-                            fill="none" stroke={strokeColor} strokeWidth={isAccepted ? 3 : 2} strokeDasharray={strokeDash}
-                            className={`transition-all duration-1000 ${isRejected ? 'animate-[fadeOut_1.5s_forwards]' : ''}`}
+                            d={`M ${startX} ${parentNode.y} C ${startX + 50} ${parentNode.y}, ${node.x - 50} ${node.y}, ${node.x - 45} ${node.y}`}
+                            fill="none" stroke={strokeColor} strokeWidth={strokeWidthValue} strokeDasharray={strokeDash}
+                            className={lineClasses}
                         />
                     );
                 });
@@ -144,106 +283,218 @@
                 <div className="flex flex-col min-h-screen bg-[#020617] text-slate-200 font-sans p-6 md:p-8">
                     <div className="mb-6 flex justify-between items-end border-b border-slate-800 pb-4">
                         <div>
-                            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-cyan-400 flex items-center gap-2">
-                                <Layers className="w-6 h-6 text-violet-400" />
-                                Tree Attention 矩阵级模拟器
+                            <h1 className="text-2xl lg:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-cyan-400 flex items-center gap-2">
+                                <Layers className="w-8 h-8 text-violet-400" />
+                                EAGLE 真实引擎逻辑模拟器 (淘汰阴影区分版)
                             </h1>
-                            <p className="text-sm text-slate-400 mt-1">深度解构 EAGLE-3：大模型如何通过 2D Mask 与 QK^T 矩阵乘法，一次性验证整棵推测树</p>
+                            <p className="text-base text-slate-400 mt-2">被 Cache 淘汰的节点以专属的“斜线阴影”永久标记，与存活节点形成鲜明对比</p>
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 h-[75vh]">
+                    <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 h-[75vh]">
                         {/* Left Panel */}
                         <div className="xl:col-span-5 bg-slate-900/50 border border-slate-800 rounded-2xl p-5 relative overflow-hidden flex flex-col shadow-xl">
-                            <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest flex items-center gap-2 mb-4 border-b border-slate-800 pb-2 shrink-0">
-                                <GitBranch className="w-4 h-4 text-violet-400" /> 1. Draft 树形结构
+                            <h2 className="text-base font-bold text-slate-300 uppercase tracking-widest flex items-center gap-2 mb-4 border-b border-slate-800 pb-2 shrink-0">
+                                <GitBranch className="w-5 h-5 text-violet-400" /> 1. 自回归 4步并行批量生成
                             </h2>
                             <div className="flex-1 relative bg-slate-950/50 rounded-xl border border-slate-800/50 overflow-hidden flex items-center justify-center">
-                               <div className="relative w-[850px] h-[450px] shrink-0 scale-90 xl:scale-100 origin-center">
+                               
+                               {phase === 1 && (
+                                   <div className="absolute bottom-4 right-4 w-[460px] bg-slate-900/95 border-2 border-violet-500/50 p-5 rounded-2xl shadow-[0_0_30px_rgba(139,92,246,0.3)] backdrop-blur-md z-50 animate-[slideInRight_0.4s_ease-out]">
+                                       <h4 className="font-bold text-violet-300 mb-4 flex items-center justify-between gap-2 border-b border-violet-800/50 pb-3 text-base lg:text-lg">
+                                           <span className="flex items-center gap-2"><Code className="w-5 h-5 text-violet-400"/> Depth: {treeDepth} 并行批处理中</span>
+                                           <span className="text-sm bg-red-900/40 border border-red-500/50 px-2 py-1 rounded-md text-red-200">剪枝阈值 τ=0.05</span>
+                                       </h4>
+                                       
+                                       <ul className="space-y-4 text-slate-300 font-mono text-sm lg:text-base leading-relaxed mb-5">
+                                           <li className={`transition-all duration-500 flex items-center gap-3 ${algoStage === 1 ? "text-cyan-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
+                                               <span className="w-6 h-6 rounded-full bg-cyan-900 flex items-center justify-center text-cyan-400 shrink-0 shadow-lg text-sm">1</span> 
+                                               批量提取 (Batch Extract)
+                                           </li>
+                                           <li className={`transition-all duration-500 flex items-center gap-3 ${algoStage === 2 ? "text-amber-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
+                                               <span className="w-6 h-6 rounded-full bg-amber-900 flex items-center justify-center text-amber-400 shrink-0 shadow-lg text-sm">2</span> 
+                                               批量采样 (Batch Sample Top-K)
+                                           </li>
+                                           <li className={`transition-all duration-500 flex items-center gap-3 ${algoStage === 3 ? "text-pink-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
+                                               <span className="w-6 h-6 rounded-full bg-pink-900 flex items-center justify-center text-pink-400 shrink-0 shadow-lg text-sm">3</span> 
+                                               全局剪枝 (Global Prune via τ)
+                                           </li>
+                                           <li className={`transition-all duration-500 flex items-center gap-3 ${algoStage === 4 ? "text-emerald-300 scale-105 origin-left font-bold" : "opacity-40"}`}>
+                                               <span className="w-6 h-6 rounded-full bg-emerald-900 flex items-center justify-center text-emerald-400 shrink-0 shadow-lg text-sm">4</span> 
+                                               更新缓存 (Update Tree KVCache)
+                                           </li>
+                                       </ul>
+
+                                       <div className="bg-slate-950 p-4 rounded-xl border border-slate-700/50 text-sm lg:text-base text-slate-400 leading-relaxed min-h-[70px] flex items-center shadow-inner">
+                                            {getAlgoDetailText()}
+                                       </div>
+                                   </div>
+                               )}
+
+                               <div className="relative w-[1000px] h-[550px] shrink-0 origin-center scale-90 2xl:scale-100">
                                  <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">{phase >= 1 && renderTreeEdges()}</svg>
                                  
                                  <div className="absolute z-30 transition-all duration-700" style={{ left: ROOT_NODE.x, top: ROOT_NODE.y, transform: 'translate(-50%, -50%)' }}>
-                                    <div className="bg-slate-800 text-sm font-mono px-3 py-2 rounded-xl border-2 border-violet-500 shadow-[0_0_15px_rgba(139,92,246,0.3)] flex gap-2 items-center whitespace-nowrap">
-                                        <span className="text-violet-400 font-bold text-xs uppercase">Prompt</span>
+                                    <div className={`bg-slate-800 text-lg font-mono px-5 py-3 rounded-xl border-2 transition-all 
+                                        ${phase === 1 && isParentOfCurrentDepth('root') && algoStage === 1 ? 'animate-[pulseBorder_1.5s_infinite]' : 'border-violet-500 shadow-[0_0_20px_rgba(139,92,246,0.3)]'} 
+                                        flex gap-3 items-center whitespace-nowrap`}>
+                                        <span className="text-violet-400 font-bold text-sm uppercase">Prompt</span>
                                         <span className="text-slate-200">{ROOT_NODE.text}</span>
                                     </div>
+                                    {phase === 1 && isParentOfCurrentDepth('root') && algoStage === 1 && (
+                                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 text-sm text-cyan-300 font-mono whitespace-nowrap bg-cyan-900/90 px-3 py-1 rounded shadow-lg">
+                                            Batch 提取中...
+                                        </div>
+                                    )}
                                  </div>
 
-                                 {phase >= 1 && DRAFT_NODES.map((node) => {
-                                   const isRejected = phase === 5 && !['n1', 'n4', 'n5'].includes(node.id);
-                                   const isAccepted = phase === 5 && !isRejected;
+                                 {phase >= 1 && ALL_DRAFT_NODES.map((node) => {
+                                   let isVisible = false;
+                                   let animationClass = '';
+                                   let customStyle = { left: node.x, top: node.y, transform: 'translate(-50%, -50%)' };
+                                   let boxClass = 'bg-violet-950/50 border-violet-500/50 text-violet-200';
+                                   let showProb = false;
+                                   let showCacheIcon = false;
+                                   let pruneText = null;
+
+                                   if (phase === 1) {
+                                       if (node.depth < treeDepth) {
+                                           isVisible = true; 
+                                           if (node.isDummy) {
+                                               // 【修改点】：历史层级的淘汰节点永久呈现阴影背景
+                                               boxClass = 'bg-striped-dead opacity-60';
+                                           } else if (isParentOfCurrentDepth(node.id) && algoStage === 1) {
+                                               customStyle.animation = 'pulseBorder 1.5s infinite';
+                                               boxClass = 'bg-slate-800 border-cyan-400 text-cyan-100 shadow-[0_0_20px_#22d3ee]';
+                                               pruneText = <div className="absolute -top-8 left-1/2 -translate-x-1/2 text-sm text-cyan-300 font-mono whitespace-nowrap bg-cyan-900/90 px-3 py-1 rounded border border-cyan-400 shadow-lg z-50">读取 Cache 并行提取...</div>;
+                                           } else {
+                                               boxClass = 'bg-slate-800 border-emerald-600/50 text-emerald-200/80'; 
+                                           }
+                                       } else if (node.depth === treeDepth) {
+                                           if (algoStage >= 2) isVisible = true;
+                                           
+                                           if (algoStage === 2) {
+                                               animationClass = 'animate-[popInFaint_0.5s_forwards]';
+                                               boxClass = 'bg-amber-950/40 border-amber-500/50 text-amber-200 border-dashed';
+                                               showProb = true;
+                                           } 
+                                           else if (algoStage === 3) {
+                                               showProb = true;
+                                               if (node.isDummy) {
+                                                   // 【修改点】：淘汰瞬间执行特殊动画，并染上阴影
+                                                   animationClass = 'animate-[pruneDead_0.5s_forwards]';
+                                                   boxClass = 'bg-striped-dead scale-95';
+                                                   pruneText = <div className="absolute -right-24 top-1/2 -translate-y-1/2 text-sm text-red-400 font-bold bg-red-950/90 px-2 py-1 rounded shadow-lg whitespace-nowrap z-50">P &lt; 0.05 淘汰!</div>;
+                                               } else {
+                                                   animationClass = 'animate-[popInSolid_0.5s_forwards]';
+                                                   boxClass = 'bg-pink-950/70 border-pink-400 text-pink-200 scale-110 shadow-[0_0_20px_#f472b6]';
+                                                   pruneText = <div className="absolute -right-16 top-1/2 -translate-y-1/2 text-sm text-emerald-400 bg-emerald-950/90 px-2 py-1 rounded shadow-lg whitespace-nowrap z-50">保留 ✓</div>;
+                                               }
+                                           }
+                                           else if (algoStage === 4) {
+                                               if (node.isDummy) {
+                                                   // 【修改点】：保持淘汰节点可见，维持阴影
+                                                   isVisible = true; 
+                                                   boxClass = 'bg-striped-dead opacity-60';
+                                               } else {
+                                                   customStyle.animation = 'saveToCache 2s ease-out forwards';
+                                                   boxClass = 'bg-emerald-950 border-emerald-500 text-emerald-300';
+                                                   showCacheIcon = true;
+                                               }
+                                           }
+                                       }
+                                   } else {
+                                       isVisible = true;
+                                       if (node.isDummy) {
+                                            // 【修改点】：在验证阶段，未进 Cache 的淘汰节点依然作为阴影背景存在
+                                            boxClass = 'bg-striped-dead opacity-40';
+                                       } else {
+                                            const isRejected = phase === 5 && !['n1', 'n4', 'n7'].includes(node.id);
+                                            const isAccepted = phase === 5 && !isRejected;
+                                            
+                                            if (isAccepted) boxClass = 'bg-emerald-950 border-emerald-500 text-emerald-300 scale-110 shadow-[0_0_20px_#34d399]';
+                                            else if (isRejected) { 
+                                                // Target 验证被淘汰的有效节点执行碎裂动画
+                                                boxClass = 'bg-red-950 border-red-800 text-red-400 grayscale opacity-50'; 
+                                                customStyle.animation = 'shatter 2s forwards'; 
+                                            }
+                                       }
+                                   }
+
+                                   if (!isVisible) return null;
+
                                    return (
-                                     <div key={node.id} className={`absolute z-20 transition-all duration-700 animate-[popIn_0.3s_ease-out]`}
-                                          style={{ left: node.x, top: node.y, transform: 'translate(-50%, -50%)', animation: isRejected ? 'shatter 1.5s forwards' : '' }}>
-                                        <div className={`px-3 py-1.5 rounded-lg border-2 text-sm font-mono flex flex-col items-center shadow-lg transition-colors whitespace-nowrap
-                                            ${isAccepted ? 'bg-emerald-950 border-emerald-500 text-emerald-300 scale-110' : 
-                                              isRejected ? 'bg-red-950 border-red-800 text-red-400 grayscale opacity-50' : 
-                                              'bg-violet-950/50 border-violet-500/50 text-violet-200'}
-                                        `}>
-                                           <span>{node.text}</span>
-                                           <span className="text-[8px] opacity-70 mt-0.5">{node.id}</span>
+                                     <div key={node.id} className={`absolute z-20 transition-all duration-700 ${animationClass}`} style={customStyle}>
+                                        <div className={`px-4 py-2 rounded-xl border-2 text-base font-mono flex flex-col items-center transition-colors whitespace-nowrap relative ${boxClass}`}>
+                                           {showCacheIcon && <Database className="w-4 h-4 absolute -top-2 -right-2 text-emerald-400 bg-slate-900 rounded-full" />}
+                                           <span className={node.isDummy ? "line-through opacity-80" : ""}>{node.text}</span>
+                                           
+                                           <div className="flex gap-2 items-center mt-1">
+                                               <span className="text-xs opacity-70">{node.id}</span>
+                                               {showProb && (
+                                                   <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${node.prob < THRESHOLD ? 'bg-red-900/90 text-red-300' : 'bg-slate-900/90 text-amber-300'}`}>
+                                                       P={node.prob}
+                                                   </span>
+                                               )}
+                                           </div>
                                         </div>
+                                        {pruneText}
                                      </div>
                                    );
                                  })}
                                </div>
-                               
-                               <div className="absolute bottom-4 right-4 z-40 bg-violet-900/60 p-2 rounded border border-violet-500/50 backdrop-blur text-[10px] text-violet-200 shadow-xl">
-                                 Draft Model (8B) Guess Tree
-                               </div>
                             </div>
-                            <div className="mt-4 flex flex-col gap-2 shrink-0">
-                                <button onClick={triggerSpeculation} disabled={phase > 0 && phase < 5} className="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-2.5 rounded-xl shadow-[0_0_15px_rgba(139,92,246,0.3)] disabled:opacity-50 transition-all flex justify-center items-center gap-2">
-                                    {phase === 0 || phase === 5 ? <><Play className="w-4 h-4"/> 发起一次 Forward Pass 验证</> : '矩阵计算中...'}
-                                </button>
-                                <button onClick={() => setIsAutoPlay(!isAutoPlay)} className={`w-full font-bold py-2 rounded-xl text-sm border ${isAutoPlay ? 'bg-amber-600/20 text-amber-400 border-amber-600/50' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'}`}>
-                                    开启自动演示
+                            <div className="mt-5 flex flex-col gap-3 shrink-0">
+                                <button onClick={triggerSpeculation} disabled={phase > 0 && phase < 5} className="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-3 rounded-xl shadow-[0_0_20px_rgba(139,92,246,0.3)] disabled:opacity-50 transition-all flex justify-center items-center gap-2 text-base">
+                                    {phase === 0 || phase === 5 ? <><Play className="w-5 h-5"/> 启动真实底层逻辑演示</> : '算法慢速执行中...注意观察多分支拓展'}
                                 </button>
                             </div>
                         </div>
 
                         {/* Right Panel */}
                         <div className="xl:col-span-7 bg-[#0B1120] border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col overflow-y-auto">
-                            <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest flex items-center justify-between mb-4 border-b border-slate-800 pb-2 shrink-0">
-                                <div className="flex items-center gap-2"><Cpu className="w-4 h-4 text-emerald-400" /> Target Model (70B) Attention Core</div>
-                                {phase >= 2 && <div className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/50 animate-pulse">Batch Size = 6</div>}
+                            <h2 className="text-base font-bold text-slate-300 uppercase tracking-widest flex items-center justify-between mb-4 border-b border-slate-800 pb-2 shrink-0">
+                                <div className="flex items-center gap-2"><Cpu className="w-5 h-5 text-emerald-400" /> Target Model 一次性验证</div>
+                                {phase >= 2 && <div className="text-sm bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-md border border-emerald-500/50 animate-pulse">Batch Size = {VALID_NODES.length}</div>}
                             </h2>
 
-                            <div className="flex gap-2 mb-6 text-[10px] font-mono font-bold tracking-widest uppercase opacity-80 shrink-0">
-                                <div className={`flex-1 p-2 text-center rounded border transition-all ${phase >= 2 ? 'bg-violet-900/40 border-violet-500 text-violet-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>1. Pack & Mask</div>
-                                <div className={`flex-1 p-2 text-center rounded border transition-all ${phase >= 3 ? 'bg-cyan-900/40 border-cyan-500 text-cyan-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>2. Q·K^T MatMul</div>
-                                <div className={`flex-1 p-2 text-center rounded border transition-all ${phase >= 4 ? 'bg-amber-900/40 border-amber-500 text-amber-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>3. Softmax Logits</div>
-                                <div className={`flex-1 p-2 text-center rounded border transition-all ${phase >= 5 ? 'bg-emerald-900/40 border-emerald-500 text-emerald-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>4. Verify & Accept</div>
+                            <div className="flex gap-3 mb-6 text-sm font-mono font-bold tracking-widest uppercase opacity-80 shrink-0">
+                                <div className={`flex-1 p-2 lg:p-3 text-center rounded-lg border transition-all ${phase >= 2 ? 'bg-violet-900/40 border-violet-500 text-violet-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>1. Pack & Mask</div>
+                                <div className={`flex-1 p-2 lg:p-3 text-center rounded-lg border transition-all ${phase >= 3 ? 'bg-cyan-900/40 border-cyan-500 text-cyan-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>2. Q·K^T MatMul</div>
+                                <div className={`flex-1 p-2 lg:p-3 text-center rounded-lg border transition-all ${phase >= 4 ? 'bg-amber-900/40 border-amber-500 text-amber-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>3. Softmax Logits</div>
+                                <div className={`flex-1 p-2 lg:p-3 text-center rounded-lg border transition-all ${phase >= 5 ? 'bg-emerald-900/40 border-emerald-500 text-emerald-300' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>4. Verify & Accept</div>
                             </div>
 
-                            <div className="flex-1 flex flex-col xl:flex-row gap-6 items-stretch min-h-[320px] lg:mt-2">
-                                <div className="flex-[1.2] flex flex-col items-center justify-center bg-slate-900/30 rounded-2xl p-4 border border-slate-800/50 relative">
-                                    <h3 className="text-xs sm:text-sm lg:text-base font-bold text-slate-400 flex items-center gap-2 absolute top-5"><Hash className="w-4 h-4 lg:w-5 lg:h-5"/> 6x6 Tree Mask 矩阵</h3>
+                            <div className="flex-1 flex flex-col xl:flex-row gap-6 items-stretch min-h-[420px] lg:mt-2">
+                                {/* 动态矩阵块 */}
+                                <div className="flex-[1.2] flex flex-col items-center justify-center bg-slate-900/30 rounded-2xl p-4 border border-slate-800/50 relative overflow-hidden">
+                                    <h3 className="text-sm lg:text-base font-bold text-slate-400 flex items-center gap-2 absolute top-4"><Hash className="w-5 h-5"/> {VALID_NODES.length}x{VALID_NODES.length} 动态 Tree Mask 矩阵</h3>
                                     {phase >= 2 ? (
-                                        <div className="animate-[popIn_0.4s_ease-out] w-full flex justify-center mt-10 mb-6">
-                                            <div className="inline-grid grid-cols-[auto_repeat(6,minmax(2.5rem,4rem))] sm:grid-cols-[auto_repeat(6,minmax(3rem,4.5rem))] gap-1.5 sm:gap-2 lg:gap-3 items-center">
+                                        <div className="animate-[popIn_0.8s_ease-out] w-full flex justify-center mt-12 mb-4">
+                                            <div className="inline-grid gap-2 lg:gap-3 items-center" 
+                                                 style={{ gridTemplateColumns: `auto repeat(${VALID_NODES.length}, minmax(3rem, 4rem))` }}>
                                                 <div></div>
-                                                {DRAFT_NODES.map(n => <div key={`col-${n.id}`} className="text-center text-[10px] sm:text-xs lg:text-sm text-slate-500 font-mono">K({n.id})</div>)}
+                                                {VALID_NODES.map(n => <div key={`col-${n.id}`} className="text-center text-sm lg:text-base font-bold text-slate-500 font-mono">K({n.id})</div>)}
                                                 
                                                 {TREE_MASK.map((row, rIdx) => {
                                                     const isActive = activeRow === rIdx;
                                                     return (
                                                         <React.Fragment key={`row-${rIdx}`}>
-                                                            <div className={`text-right pr-2 sm:pr-3 text-[10px] sm:text-xs lg:text-sm font-mono font-bold transition-colors ${isActive ? 'text-cyan-400' : 'text-violet-400'}`}>
-                                                                Q({DRAFT_NODES[rIdx].id})
+                                                            <div className={`text-right pr-3 text-sm lg:text-base font-mono font-bold transition-colors ${isActive ? 'text-cyan-400' : 'text-violet-400'}`}>
+                                                                Q({VALID_NODES[rIdx].id})
                                                             </div>
                                                             {row.map((val, cIdx) => (
                                                                 <div key={`cell-${rIdx}-${cIdx}`} 
-                                                                     className={`aspect-square rounded-xl border flex items-center justify-center font-mono text-xs sm:text-sm lg:text-base transition-all duration-500
+                                                                     className={`aspect-square rounded-xl border-2 flex items-center justify-center font-mono text-lg lg:text-xl font-black transition-all duration-700
                                                                          ${val === 1 
                                                                              ? isActive 
-                                                                                 ? 'bg-emerald-900/80 border-emerald-400 text-emerald-300 shadow-[0_0_15px_#34d399] scale-110 z-10'
+                                                                                 ? 'bg-emerald-900/80 border-emerald-400 text-emerald-300 shadow-[0_0_20px_#34d399] scale-110 z-10'
                                                                                  : 'bg-slate-800/90 border-emerald-600/50 text-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.1)]'
                                                                              : isActive
                                                                                  ? 'bg-slate-900 border-red-900/50 text-red-900/60 shadow-[inset_0_0_10px_#0891b2] border-cyan-900/50'
                                                                                  : 'bg-slate-950 border-slate-800/50 text-slate-800/50'}
                                                                      `}
-                                                                     style={isActive && val === 1 ? { animation: `glowCell 0.6s ease-in-out ${cIdx * 0.08}s` } : {}}
+                                                                     style={isActive && val === 1 ? { animation: `glowCell 0.8s ease-in-out ${cIdx * 0.1}s` } : {}}
                                                                 >
                                                                     {val === 1 ? '1' : '-∞'}
                                                                 </div>
@@ -254,60 +505,52 @@
                                             </div>
                                         </div>
                                     ) : (
-                                        <div className="w-full h-48 border-2 border-dashed border-slate-800 rounded-xl flex items-center justify-center text-slate-600 text-sm mt-10 mb-6">等待装载...</div>
+                                        <div className="w-full h-56 border-2 border-dashed border-slate-800 rounded-xl flex items-center justify-center text-slate-600 text-base mt-10 mb-6">等待生成最终批处理节点数...</div>
                                     )}
-                                    {phase >= 2 && <p className="text-[10px] sm:text-xs lg:text-sm text-slate-500 absolute bottom-5 text-center">严格屏蔽平行分支的注意力 (如 n2 看不到 n1)</p>}
                                 </div>
 
-                                <div className="flex-[0.8] flex flex-col justify-center gap-2 lg:gap-4 mt-6 xl:mt-0">
-                                    <h3 className="text-xs sm:text-sm lg:text-base font-bold text-slate-400 mb-1 lg:mb-2 flex items-center gap-2"><Zap className="w-4 h-4 lg:w-5 lg:h-5"/> 并行 Logits 输出 & 裁决</h3>
-                                    <div className="flex flex-col gap-2.5">
+                                {/* Logits 输出块 */}
+                                <div className="flex-[0.8] flex flex-col gap-3 mt-6 xl:mt-0 overflow-y-auto custom-scrollbar pr-2 pb-2 relative">
+                                    <h3 className="text-sm lg:text-base font-bold text-slate-400 mb-1 flex items-center gap-2 sticky top-0 bg-[#0B1120] py-2 z-10"><Zap className="w-5 h-5"/> 并行输出 & 裁决</h3>
+                                    <div className="flex flex-col gap-3">
                                         {phase >= 4 ? TARGET_PREDICTIONS.map((pred, idx) => {
-                                            const node = DRAFT_NODES[idx];
-                                            const acceptedNodes = ['n1', 'n4', 'n5'];
+                                            const node = VALID_NODES[idx];
+                                            const acceptedNodes = ['n1', 'n4', 'n7']; 
                                             const isRowAccepted = phase === 5 && acceptedNodes.includes(node.id);
                                             const isRowRejected = phase === 5 && !isRowAccepted;
 
                                             return (
-                                                <div key={`pred-${idx}`} className={`p-2.5 rounded-xl border flex items-center justify-between transition-all duration-700 animate-[slideInRight_0.4s_ease-out]
-                                                    ${isRowAccepted ? 'bg-emerald-950/40 border-emerald-600 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 
+                                                <div key={`pred-${idx}`} className={`p-3 lg:p-3.5 rounded-xl border-2 flex items-center justify-between transition-all duration-1000 animate-[slideInRight_0.6s_ease-out]
+                                                    ${isRowAccepted ? 'bg-emerald-950/40 border-emerald-600 shadow-[0_0_20px_rgba(16,185,129,0.2)]' : 
                                                       isRowRejected ? 'bg-red-950/20 border-red-900/50 opacity-60' : 'bg-slate-900 border-slate-700'}
                                                 `} style={{ animationDelay: `${idx * 0.1}s` }}>
-                                                    <div className="flex items-center gap-2.5">
-                                                        <div className="w-5 h-5 rounded-full bg-slate-800 border border-slate-600 flex items-center justify-center text-[9px] font-mono text-slate-400 shrink-0">{node.id}</div>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-8 h-8 rounded-full bg-slate-800 border-2 border-slate-600 flex items-center justify-center text-sm font-mono font-bold text-slate-300 shrink-0">{node.id}</div>
                                                         <div className="flex flex-col">
-                                                            <span className="text-[9px] text-slate-500 whitespace-nowrap">基于: <span className="text-slate-300 font-mono">... {node.text}</span></span>
-                                                            <span className="text-xs font-bold text-white font-mono mt-0.5 whitespace-nowrap">➔ "{pred.target}" <span className="text-[9px] text-emerald-400 font-normal ml-1">{(pred.prob*100).toFixed(1)}%</span></span>
+                                                            <span className="text-xs text-slate-500 whitespace-nowrap">基于: <span className="text-slate-300 font-mono">... {node.text}</span></span>
+                                                            <span className="text-base lg:text-lg font-bold text-white font-mono mt-0.5 whitespace-nowrap">➔ "{pred.target}" <span className="text-xs text-emerald-400 font-normal ml-2 bg-emerald-950/50 px-1.5 py-0.5 rounded">{(pred.prob*100).toFixed(1)}%</span></span>
                                                         </div>
                                                     </div>
                                                     {phase === 5 && (
-                                                        <div className="flex items-center gap-1.5 shrink-0">
+                                                        <div className="flex items-center gap-2 shrink-0">
                                                             {isRowAccepted ? (
-                                                                <><div className="text-[9px] flex flex-col items-end"><span className="text-emerald-400 font-bold whitespace-nowrap">命中主路径</span></div><CheckCircle2 className="w-4 h-4 text-emerald-500"/></>
+                                                                <><div className="text-xs flex flex-col items-end"><span className="text-emerald-400 font-bold whitespace-nowrap">主路径</span></div><CheckCircle2 className="w-5 h-5 text-emerald-500"/></>
                                                             ) : (
-                                                                <><div className="text-[9px] flex flex-col items-end"><span className="text-red-400 font-bold whitespace-nowrap">分支淘汰</span></div><XCircle className="w-4 h-4 text-red-500"/></>
+                                                                <><div className="text-xs flex flex-col items-end"><span className="text-red-400 font-bold whitespace-nowrap">被淘汰</span></div><XCircle className="w-5 h-5 text-red-500"/></>
                                                             )}
                                                         </div>
                                                     )}
                                                 </div>
                                             )
                                         }) : (
-                                            <div className="w-full h-full border-2 border-dashed border-slate-800 rounded-xl flex items-center justify-center text-slate-600 text-xs min-h-[200px]">
-                                                {phase === 3 ? '矩阵乘法计算中...' : '等待 Attention 计算完成...'}
+                                            <div className="w-full h-full border-2 border-dashed border-slate-800 rounded-xl flex items-center justify-center text-slate-600 text-base min-h-[250px]">
+                                                {phase === 3 ? 'Target 矩阵并行计算中...' : '等待 Attention 计算完成...'}
                                             </div>
                                         )}
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="mt-4 p-4 bg-violet-950/30 border border-violet-900/50 rounded-xl text-xs leading-relaxed text-violet-200 shrink-0">
-                                {phase === 0 && "系统空闲。点击左侧按钮启动 EAGLE-3 单次前向推理 (Forward Pass) 完整流程验证。"}
-                                {phase === 1 && "Draft 模型 (8B) 极速生成推测树。基于 Prompt 延伸出了 6 个潜在节点，形成 3 条并行的未来分支。"}
-                                {phase === 2 && "【关键】将 6 个节点打包为 1 个 Batch 塞入 70B 模型。动态生成完美的 6x6 Tree Mask 矩阵，防止平行分支在注意力计算中互相干扰。"}
-                                {phase === 3 && "【矩阵计算】Target 模型并行计算这 6 个节点的 QK^T 点积。掩码中 -∞ 的位置在 Softmax 后概率变为 0，严格遵循树形因果逻辑。"}
-                                {phase === 4 && "计算完成！Target 模型针对这 6 个节点，并行输出了 6 个下一步的预测概率 (Logits)。"}
-                                {phase === 5 && "【裁决】对比 Target 输出与 Draft 树。主路径 n1->n4->n5 完美命中被接受，而 n2 和 n3 错误分支被无情剪枝淘汰！"}
-                            </div>
                         </div>
                     </div>
                 </div>
