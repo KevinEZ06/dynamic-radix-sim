@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vLLM 显存管理与调度抢占 (第八步左侧高架绕行终极版)</title>
+    <style>
+        :root {
+            --bg: #0f172a; --panel-bg: #1e293b; --text: #e2e8f0; --border: #334155;
+            --gpu-color: #3b82f6; --cpu-color: #f59e0b;
+            --req-a: #ef4444; --req-b: #10b981; --req-c: #8b5cf6; --req-d: #ec4899;
+        }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; overflow-x: hidden; }
+        h1 { margin-top: 0; font-size: 22px; color: #38bdf8; z-index: 10;}
+        
+        .controls { margin-bottom: 20px; display: flex; gap: 12px; align-items: center; z-index: 10; position: relative;}
+        button { padding: 8px 16px; font-size: 14px; font-weight: bold; cursor: pointer; border: none; border-radius: 6px; background-color: #38bdf8; color: #0f172a; transition: all 0.2s; box-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+        button:hover { background-color: #0ea5e9; box-shadow: 0 0 15px rgba(56, 189, 248, 0.8); }
+        button:disabled { background-color: #475569; cursor: not-allowed; box-shadow: none; color: #94a3b8; }
+        button.reset { background-color: #ef4444; color: white; box-shadow: 0 0 10px rgba(239, 68, 68, 0.4); }
+        button.prev { background-color: #64748b; color: white; box-shadow: 0 0 10px rgba(100, 116, 139, 0.4); }
+        button.prev:hover:not(:disabled) { background-color: #475569; }
+        
+        .dashboard { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 20px; width: 100%; max-width: 1300px; z-index: 5; position: relative; }
+        
+        .panel { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; padding: 15px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5); position: relative; }
+        .panel h2 { font-size: 16px; margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 8px; color: #94a3b8; }
+        
+        /* 调度队列 */
+        .queue-box { border: 2px dashed var(--border); border-radius: 8px; padding: 10px; margin-bottom: 15px; min-height: 40px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; position: relative; }
+        .queue-title { width: 100%; font-size: 12px; font-weight: bold; color: #64748b; margin-bottom: 5px; }
+        .queue-box.running { border-color: #3b82f6; background: rgba(59, 130, 246, 0.05); }
+        .queue-box.waiting { border-color: #f59e0b; background: rgba(245, 158, 11, 0.05); }
+        .queue-box.swapped { border-color: #8b5cf6; background: rgba(139, 92, 246, 0.05); }
+        
+        /* 标签 */
+        .req-tag { padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; color: white; position: relative; z-index: 10; transition: background-color 0.3s, opacity 0.3s; }
+        .req-tag.A { background-color: var(--req-a); } .req-tag.B { background-color: var(--req-b); }
+        .req-tag.C { background-color: var(--req-c); } .req-tag.D { background-color: var(--req-d); }
+        
+        /* 块表与映射 */
+        .block-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: center; }
+        .block-table th, .block-table td { border: 1px solid var(--border); padding: 6px; }
+        .block-table th { background-color: #0f172a; color: #94a3b8; }
+        
+        /* 策略判定器面板 */
+        .policy-inspector { margin-top: 15px; padding: 12px; border-radius: 8px; background: #0f172a; border: 1px solid #334155; font-size: 12px; line-height: 1.5; }
+        .policy-title { color: #38bdf8; font-weight: bold; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+        .policy-row { display: flex; justify-content: space-between; margin-bottom: 4px; color: #94a3b8; }
+        .policy-val { color: #facc15; font-weight: bold; }
+        .policy-val.active { color: #10b981; }
+        .policy-val.alert { color: #ef4444; }
+
+        .slot-mapping-box { margin-top: 15px; padding: 10px; border-radius: 8px; background: #0f172a; border: 1px solid #0ea5e9; font-family: monospace; font-size: 13px; color: #38bdf8; display: none; box-shadow: 0 0 15px rgba(14, 165, 233, 0.2); }
+        
+        /* 显存池 */
+        .pool-header { display: flex; justify-content: space-between; font-size: 12px; font-weight: bold; margin-bottom: 10px; }
+        .pool-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 20px; }
+        .block { border: 1px solid var(--border); border-radius: 6px; padding: 6px; background: #0f172a; position: relative; overflow: hidden; transition: box-shadow 0.3s, transform 0.3s; }
+        .block.glow { box-shadow: 0 0 15px rgba(255,255,255,0.4); transform: scale(1.02); }
+        
+        .block-title { font-size: 11px; margin-bottom: 5px; color: #94a3b8; display: flex; justify-content: space-between; position: relative; z-index: 20;}
+        .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; position: relative; z-index: 20;}
+        .slot { aspect-ratio: 1; border-radius: 2px; background: #334155; border: 1px solid #1e293b; }
+        
+        .slot.A { background-color: var(--req-a); box-shadow: 0 0 5px var(--req-a); } 
+        .slot.B { background-color: var(--req-b); box-shadow: 0 0 5px var(--req-b); }
+        .slot.C { background-color: var(--req-c); box-shadow: 0 0 5px var(--req-c); } 
+        .slot.D { background-color: var(--req-d); box-shadow: 0 0 5px var(--req-d); }
+        
+        .gpu-pool .block { border-color: rgba(59, 130, 246, 0.5); }
+        .cpu-pool .block { border-color: rgba(245, 158, 11, 0.5); }
+
+        /* 残影 Slot 特效 */
+        .slot.ghost-slot { background-color: transparent !important; border: 1px dashed rgba(255,255,255,0.3) !important; box-shadow: none !important; }
+        
+        /* 日志 */
+        .logger { margin-top: 20px; width: 100%; max-width: 1300px; height: 130px; background: #000; border: 1px solid var(--border); border-radius: 8px; padding: 15px; font-family: monospace; overflow-y: auto; color: #a3e635; box-sizing: border-box; line-height: 1.6; z-index: 5; position: relative; }
+        .log-step { color: #facc15; font-weight: bold; }
+        .highlight { color: #38bdf8; font-weight: bold; }
+        .alert { color: #ef4444; font-weight: bold; }
+
+        /* SVG 动画光线 */
+        #svg-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 9999; }
+        .light-beam { stroke-dasharray: 15 10; animation: flow 0.6s linear infinite; }
+        @keyframes flow { from { stroke-dashoffset: 25; } to { stroke-dashoffset: 0; } }
+        .beam-label { font-size: 11px; font-weight: bold; font-family: sans-serif; letter-spacing: 0.5px; }
+        .label-bg { fill: #0f172a; stroke: #334155; stroke-width: 1.5px; }
+    </style>
+</head>
+<body>
+    <svg id="svg-layer"><defs id="svg-defs"></defs></svg>
+
+    <h1>vLLM 显存调度全景模拟 (第八步左侧高架绕行版)</h1>
+    
+    <div class="controls">
+        <button id="btnPrev" class="prev" onclick="prevStep()" disabled>◀ 上一步</button>
+        <button id="btnNext" onclick="nextStep()">⚡ 触发下一步</button>
+        <button class="reset" onclick="resetSim()">↺ 重置系统</button>
+        <span style="font-size: 14px; color: #94a3b8; margin-left: 10px;">阶段: <span id="stepCounter" style="color: white; font-weight: bold;">0 / 8</span></span>
+    </div>
+
+    <div class="dashboard">
+        <div class="panel">
+            <h2>1. Scheduler 调度队列</h2>
+            <div class="queue-box running" id="q-running"><div class="queue-title">▶ RUNNING (运行区)</div></div>
+            <div class="queue-box waiting" id="q-waiting"><div class="queue-title">⏸ WAITING (等待/重计算区)</div></div>
+            <div class="queue-box swapped" id="q-swapped"><div class="queue-title">💾 SWAPPED (换出暂存区)</div></div>
+        </div>
+
+        <div class="panel">
+            <h2>2. KVCacheManager 显存池</h2>
+            <div class="pool-header"><span style="color: var(--gpu-color);">■ GPU BlockPool</span><span id="gpuFree"></span></div>
+            <div class="pool-grid gpu-pool" id="gpuPool"></div>
+            
+            <div class="pool-header" style="margin-top:15px;"><span style="color: var(--cpu-color);">■ CPU Pool (Swap Space)</span><span id="cpuFree"></span></div>
+            <div class="pool-grid cpu-pool" id="cpuPool"></div>
+        </div>
+        
+        <div class="panel">
+            <h2>3. Block Table & Policy</h2>
+            <table class="block-table" id="blockTable">
+                <thead><tr><th>Req</th><th>Logic</th><th>Phys ID</th><th>Pool</th></tr></thead>
+                <tbody id="blockTableBody"></tbody>
+            </table>
+            
+            <div class="policy-inspector" id="policyInspector">
+                <div class="policy-title"><span>🧠 vLLM 抢占策略判定器</span><span id="policyModeBadge" class="policy-val active">NORMAL</span></div>
+                <div class="policy-row"><span>GPU 显存状态:</span><span id="policyGpuStatus" class="policy-val">充足</span></div>
+                <div class="policy-row"><span>CPU Swap 空间:</span><span id="policyCpuStatus" class="policy-val">3/4 可用</span></div>
+                <div class="policy-row"><span>触发抢占策略:</span><span id="policyAction" class="policy-val active">无（正常调度）</span></div>
+            </div>
+
+            <div class="slot-mapping-box" id="slotMappingBox"></div>
+        </div>
+    </div>
+
+    <div class="logger" id="logger">
+        <div>系统初始化：就绪。等待触发调度指令...</div>
+    </div>
+
+    <script>
+        const BLOCK_SIZE = 4, NUM_BLOCKS = 4;
+        let step = 0;
+        let gpu = Array(NUM_BLOCKS).fill(null), cpu = Array(NUM_BLOCKS).fill(null);
+        let reqs = {};
+        let ghosts = { queue: [], gpu: {}, cpu: {} };
+        
+        const colors = { 'A': '#ef4444', 'B': '#10b981', 'C': '#8b5cf6', 'D': '#ec4899', 'swap': '#f59e0b', 'map': '#38bdf8', 'recompute': '#ef4444' };
+
+        function initSVGMarkers() {
+            const defs = document.getElementById('svg-defs');
+            defs.innerHTML = '';
+            Object.keys(colors).forEach(key => {
+                defs.innerHTML += `<marker id="arrow-${key}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="${colors[key]}" stroke="#ffffff" stroke-width="1" />
+                </marker>`;
+            });
+        }
+
+        function drawBeam(id1, id2, colorKey, label = '', pathType = 'alloc') {
+            const el1 = document.getElementById(id1);
+            const el2 = document.getElementById(id2);
+            if(!el1 || !el2 || el1.offsetParent === null || el2.offsetParent === null) return;
+
+            const rect1 = el1.getBoundingClientRect();
+            const rect2 = el2.getBoundingClientRect();
+            
+            let x1, y1, x2, y2, d, lx, ly;
+
+            y1 = rect1.top + rect1.height / 2 + window.scrollY;
+
+            if (pathType === 'alloc') {
+                x1 = rect1.right + window.scrollX;
+                y2 = rect2.top + rect2.height / 2 + window.scrollY;
+                x2 = rect2.left + window.scrollX;
+                const ctrlX = x1 + (x2 - x1) / 2;
+                d = `M ${x1} ${y1} C ${ctrlX} ${y1}, ${ctrlX} ${y2}, ${x2} ${y2}`;
+                lx = ctrlX; ly = y1 + (y2 - y1) / 2 - 15; 
+            } else if (pathType === 'allocFarUp') {
+                x1 = rect1.right + window.scrollX;
+                const blockRect = el2.closest('.block').getBoundingClientRect();
+                x2 = blockRect.left + blockRect.width / 2 + window.scrollX;
+                y2 = blockRect.top + window.scrollY; 
+                d = `M ${x1} ${y1} C ${x1 + 60} ${y1 - 60}, ${x2} ${y2 - 60}, ${x2} ${y2}`;
+                lx = x1 + (x2 - x1) * 0.6; ly = Math.min(y1, y2) - 30; 
+            } else if (pathType === 'allocFarDown') {
+                x1 = rect1.right + window.scrollX;
+                const blockRect = el2.closest('.block').getBoundingClientRect();
+                x2 = blockRect.left + blockRect.width / 2 + window.scrollX;
+                y2 = blockRect.bottom + window.scrollY; 
+                d = `M ${x1} ${y1} C ${x1 + 60} ${y1 + 80}, ${x2} ${y2 + 80}, ${x2} ${y2}`;
+                lx = x1 + (x2 - x1) * 0.6; ly = Math.max(y1, y2) + 50; 
+            } else if (pathType === 'allocUp') {
+                x1 = rect1.right + window.scrollX;
+                x2 = rect2.left + window.scrollX;
+                y2 = rect2.top + rect2.height / 2 + window.scrollY;
+                d = `M ${x1} ${y1} C ${x2 - 80} ${y1}, ${x2 - 80} ${y2}, ${x2} ${y2}`;
+                lx = x2 - 45; ly = y1 + (y2 - y1) / 2;
+            } else if (pathType === 'allocC_Blk2') {
+                x1 = rect1.right + window.scrollX;
+                const blockRect = el2.closest('.block').getBoundingClientRect();
+                x2 = blockRect.left + window.scrollX;
+                y2 = blockRect.top + blockRect.height / 2 + window.scrollY;
+                const ctrlX = x1 + (x2 - x1) * 0.45;
+                d = `M ${x1} ${y1} C ${ctrlX} ${y1 - 20}, ${ctrlX} ${y2}, ${x2} ${y2}`;
+                lx = ctrlX; ly = y1 + (y2 - y1) / 2 - 25;
+            } else if (pathType === 'allocC_Blk3') {
+                x1 = rect1.right + window.scrollX;
+                const blockRect = el2.closest('.block').getBoundingClientRect();
+                x2 = blockRect.left + window.scrollX;
+                y2 = blockRect.top + blockRect.height / 2 + window.scrollY;
+                const ctrl1X = x1 + 60;
+                const ctrl1Y = y1;
+                const ctrl2X = x1 + 140;
+                const ctrl2Y = y2 - 20;
+                d = `M ${x1} ${y1} C ${ctrl1X} ${ctrl1Y}, ${ctrl2X} ${ctrl2Y}, ${x2} ${y2}`;
+                lx = x1 + 110; ly = y1 + (y2 - y1) / 2 + 15;
+            } else if (pathType === 'verticalDropTop') {
+                x1 = rect1.left + rect1.width / 2 + window.scrollX;
+                x2 = rect2.left + rect2.width / 2 + window.scrollX;
+                y2 = rect2.top + window.scrollY;                    
+                d = `M ${x1} ${y1} C ${x1} ${y2 - 20}, ${x2} ${y1}, ${x2} ${y2}`;
+                lx = x1 + (x2 - x1) / 2; ly = y1 + (y2 - y1) / 2;
+            } else if (pathType === 'edgeRight') {
+                x1 = rect1.right + window.scrollX;
+                x2 = rect2.right + window.scrollX;
+                y2 = rect2.top + rect2.height / 2 + window.scrollY;
+                const panelRight = el1.closest('.panel').getBoundingClientRect().right + window.scrollX;
+                const apexX = panelRight - 20; 
+                d = `M ${x1} ${y1} C ${apexX} ${y1}, ${apexX} ${y2}, ${x2} ${y2}`;
+                lx = apexX - 22; ly = y1 + (y2 - y1) / 2;
+            } else if (pathType === 'leftFlyover') {
+                // 【第八步专属】：从面板左侧外部绕行，绝对不穿透面板内部的 Req D 等元素
+                x1 = rect1.left + window.scrollX;
+                x2 = rect2.left + window.scrollX;
+                y2 = rect2.top + rect2.height / 2 + window.scrollY;
+                const panelLeft = el1.closest('.panel').getBoundingClientRect().left + window.scrollX;
+                const apexX = panelLeft - 25; // 向面板左侧外部凸出
+                d = `M ${x1} ${y1} C ${apexX} ${y1}, ${apexX} ${y2}, ${x2} ${y2}`;
+                lx = apexX - 25; ly = y1 + (y2 - y1) / 2;
+            } else if (pathType === 'map') {
+                x1 = rect1.left + window.scrollX;
+                y2 = rect2.top + rect2.height / 2 + window.scrollY;
+                x2 = rect2.right + window.scrollX;
+                const ctrlX = x1 - 50;
+                d = `M ${x1} ${y1} C ${ctrlX} ${y1}, ${ctrlX} ${y2}, ${x2} ${y2}`;
+                lx = x1 - 30; ly = y1 + (y2 - y1) / 2;
+            }
+            
+            const svg = document.getElementById('svg-layer');
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', d);
+            path.setAttribute('stroke', colors[colorKey]);
+            path.setAttribute('stroke-width', '2.5');
+            path.setAttribute('fill', 'none');
+            path.setAttribute('class', 'light-beam');
+            path.setAttribute('style', `filter: drop-shadow(0 2px 4px rgba(0,0,0,0.9));`);
+            path.setAttribute('marker-end', `url(#arrow-${colorKey})`);
+            svg.appendChild(path);
+
+            if(label) {
+                const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                bg.setAttribute('x', lx - 44); bg.setAttribute('y', ly - 11);
+                bg.setAttribute('width', 88); bg.setAttribute('height', 22);
+                bg.setAttribute('rx', '11'); bg.setAttribute('class', 'label-bg');
+                svg.appendChild(bg);
+
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', lx); text.setAttribute('y', ly + 4); 
+                text.setAttribute('fill', colors[colorKey]);
+                text.setAttribute('class', 'beam-label');
+                text.setAttribute('text-anchor', 'middle');
+                text.textContent = label;
+                svg.appendChild(text);
+            }
+            
+            const glowTarget = el2.closest('.block') || el2;
+            glowTarget.classList.add('glow');
+            setTimeout(() => glowTarget.classList.remove('glow'), 1000);
+        }
+
+        function flashBlock(id, text) {
+            const el = document.getElementById(id);
+            if(!el) return;
+            el.style.boxShadow = '0 0 20px rgba(239,68,68,0.8)';
+            const overlay = document.createElement('div');
+            overlay.innerText = text;
+            overlay.style.position = 'absolute'; overlay.style.top = '50%'; overlay.style.left = '50%';
+            overlay.style.transform = 'translate(-50%, -50%)'; overlay.style.color = '#ef4444';
+            overlay.style.fontWeight = 'bold'; overlay.style.fontSize = '14px';
+            overlay.style.textShadow = '0 0 5px #000, 0 0 5px #000';
+            overlay.style.zIndex = '100'; overlay.style.width = '100%'; overlay.style.textAlign = 'center'; overlay.style.pointerEvents = 'none';
+            el.appendChild(overlay);
+            setTimeout(() => { el.style.boxShadow = ''; overlay.remove(); }, 1500);
+        }
+
+        function clearBeams() {
+            const svg = document.getElementById('svg-layer');
+            const defs = document.getElementById('svg-defs');
+            svg.innerHTML = ''; svg.appendChild(defs);
+        }
+
+        function init() {
+            initSVGMarkers(); clearBeams();
+            reqs = {
+                'A': { id: 'A', tokens: 6, state: 'WAITING', table: [], pool: 'GPU' },
+                'B': { id: 'B', tokens: 4, state: 'WAITING', table: [], pool: 'GPU' },
+                'C': { id: 'C', tokens: 7, state: 'WAITING', table: [], pool: 'GPU' },
+                'D': { id: 'D', tokens: 3, state: 'WAITING', table: [], pool: 'GPU' }
+            };
+            gpu = Array(NUM_BLOCKS).fill(null); cpu = Array(NUM_BLOCKS).fill(null);
+            ghosts = { queue: [], gpu: {}, cpu: {} };
+            step = 0;
+            document.getElementById('slotMappingBox').style.display = 'none';
+            document.getElementById('logger').innerHTML = '<div>系统初始化：就绪。等待触发调度指令...</div>';
+            updatePolicyInspector();
+            updateButtonStates();
+            render();
+        }
+
+        function log(msg, stepNum) {
+            const logger = document.getElementById('logger');
+            logger.innerHTML += `<div style="margin-top:5px;"><span class="log-step">[Step ${stepNum}/8]</span> ${msg}</div>`;
+            logger.scrollTop = logger.scrollHeight;
+        }
+
+        function updatePolicyInspector() {
+            const gpuFreeCount = gpu.filter(b => b === null).length;
+            const cpuFreeCount = cpu.filter(b => b === null).length;
+            
+            const badge = document.getElementById('policyModeBadge');
+            const gpuStatus = document.getElementById('policyGpuStatus');
+            const cpuStatus = document.getElementById('policyCpuStatus');
+            const action = document.getElementById('policyAction');
+
+            gpuStatus.innerText = gpuFreeCount > 0 ? `${gpuFreeCount}/4 可用 (充足)` : `0/4 可用 (已满)`;
+            gpuStatus.className = `policy-val ${gpuFreeCount > 0 ? 'active' : 'alert'}`;
+
+            cpuStatus.innerText = `${cpuFreeCount}/4 可用`;
+            cpuStatus.className = `policy-val ${cpuFreeCount > 0 ? 'active' : 'alert'}`;
+
+            if (step === 4) {
+                badge.innerText = "SWAP 模式";
+                badge.className = "policy-val alert";
+                action.innerText = "GPU满且CPU有空 -> 执行 Swap 换出";
+                action.className = "policy-val alert";
+            } else if (step === 6) {
+                badge.innerText = "RECOMPUTE 模式";
+                badge.className = "policy-val alert";
+                action.innerText = "GPU显存满 -> 触发 Recompute 抢占";
+                action.className = "policy-val alert";
+            } else if (gpuFreeCount === 0) {
+                badge.innerText = "资源告急";
+                badge.className = "policy-val alert";
+                action.innerText = cpuFreeCount > 0 ? "可选择 Swap" : "🔴 CPU满 -> 强制 Recompute";
+                action.className = "policy-val alert";
+            } else {
+                badge.innerText = "NORMAL";
+                badge.className = "policy-val active";
+                action.innerText = "无（正常分配）";
+                action.className = "policy-val active";
+            }
+        }
+
+        function render() {
+            ['running', 'waiting', 'swapped'].forEach(q => {
+                const el = document.getElementById(`q-${q}`);
+                Array.from(el.children).forEach(c => { if(!c.classList.contains('queue-title')) c.remove(); });
+                
+                Object.values(reqs).forEach(r => {
+                    if (r.state.toLowerCase() === q) {
+                        const tag = document.createElement('div');
+                        tag.className = `req-tag ${r.id}`; 
+                        tag.id = `tag-${r.id}`; 
+                        tag.innerText = `Req ${r.id} (${r.tokens} toks)`;
+                        el.appendChild(tag);
+                    }
+                });
+
+                ghosts.queue.forEach(g => {
+                    if (g.q === q) {
+                        const tag = document.createElement('div');
+                        tag.className = `req-tag`;
+                        tag.id = `ghost-tag-${g.id}`; 
+                        let color = colors[g.id];
+                        tag.style.cssText = `
+                            background-color: rgba(15, 23, 42, 0.6) !important;
+                            border: 2px dashed ${color}; color: ${color}; opacity: 0.8;
+                            background-image: linear-gradient(to bottom right, transparent calc(50% - 1.5px), ${color} calc(50% - 1.5px), ${color} calc(50% + 1.5px), transparent calc(50% + 1.5px));
+                            text-shadow: 0 0 4px #000;
+                        `;
+                        tag.innerText = g.text + ' (Evicted)';
+                        el.appendChild(tag);
+                    }
+                });
+            });
+
+            const tbody = document.getElementById('blockTableBody');
+            tbody.innerHTML = '';
+            Object.values(reqs).forEach(r => {
+                if (r.state !== 'WAITING' && r.table.length > 0) {
+                    r.table.forEach((physId, logId) => {
+                        tbody.innerHTML += `<tr>
+                            <td><span style="color:var(--req-${r.id.toLowerCase()}); font-weight:bold;">${r.id}</span></td>
+                            <td>Log ${logId}</td><td>${physId}</td>
+                            <td style="color:${r.pool==='GPU'?'var(--gpu-color)':'var(--cpu-color)'}">${r.pool}</td>
+                        </tr>`;
+                    });
+                }
+            });
+
+            const renderPool = (arr, elId, poolType) => {
+                const el = document.getElementById(elId);
+                el.innerHTML = '';
+                let freeCount = 0;
+                arr.forEach((reqId, idx) => {
+                    if(reqId === null) freeCount++;
+                    let slotsHtml = '';
+                    let isGhost = !reqId && ghosts[poolType][idx];
+                    let ghostId = isGhost ? ghosts[poolType][idx] : null;
+
+                    for(let i=0; i<BLOCK_SIZE; i++) {
+                        let active = false;
+                        let slotClass = '';
+                        if (reqId) {
+                            active = i < Math.max(0, Math.min(BLOCK_SIZE, reqs[reqId].tokens - reqs[reqId].table.indexOf(idx) * BLOCK_SIZE));
+                            slotClass = active ? reqId : '';
+                        } else if (isGhost) {
+                            active = true;
+                            slotClass = 'ghost-slot'; 
+                        }
+                        slotsHtml += `<div class="slot ${slotClass}"></div>`;
+                    }
+                    
+                    let blockStyle = '';
+                    if (isGhost) {
+                        let color = colors[ghostId];
+                        blockStyle = `
+                            border: 2px dashed ${color} !important; opacity: 0.8;
+                            background-image: linear-gradient(to bottom right, transparent calc(50% - 2px), ${color} calc(50% - 2px), ${color} calc(50% + 2px), transparent calc(50% + 2px));
+                        `;
+                    }
+
+                    let titleText = reqId ? reqId : (isGhost ? `<span style="color:${colors[ghostId]}">Ghost (${ghostId})</span>` : 'Free');
+
+                    el.innerHTML += `<div class="block" id="${poolType}-blk-${idx}" style="${blockStyle}">
+                        <div class="block-title"><span>Blk ${idx}</span><span>${titleText}</span></div>
+                        <div class="slots" id="${poolType}-slots-${idx}">${slotsHtml}</div>
+                    </div>`;
+                });
+                document.getElementById(`${poolType}Free`).innerText = `${freeCount}/${NUM_BLOCKS} Free`;
+            };
+            
+            renderPool(gpu, 'gpuPool', 'gpu');
+            renderPool(cpu, 'cpuPool', 'cpu');
+            document.getElementById('stepCounter').innerText = `${step} / 8`;
+            updatePolicyInspector();
+        }
+
+        function applyStepStateAndLog(s) {
+            switch(s) {
+                case 1:
+                    reqs['A'].state = 'RUNNING'; gpu[0] = 'A'; gpu[1] = 'A'; reqs['A'].table = [0, 1];
+                    log("Req A 到达。分配 GPU Block 0 和 1。", 1);
+                    break;
+                case 2:
+                    reqs['B'].state = 'RUNNING'; gpu[2] = 'B'; reqs['B'].table = [2];
+                    log("Req B 到达。分配 GPU Block 2。<br><span class='highlight'>注意: GPU 空闲块仅剩 1 个。</span>", 2);
+                    break;
+                case 3:
+                    document.getElementById('slotMappingBox').style.display = 'block';
+                    document.getElementById('slotMappingBox').innerHTML = `
+                        <div style="color:white; margin-bottom:5px;">🔍 slot_mapping 底层寻址推导</div>
+                        <div>1. 计算逻辑块: 5 // ${BLOCK_SIZE} = <span style="color:#facc15">1</span></div>
+                        <div>2. 查表物理块: Mapped to GPU Block <span style="color:#facc15">1</span></div>
+                        <div>3. 计算 Offset: 5 % ${BLOCK_SIZE} = <span style="color:#facc15">1</span></div>
+                        <div>4. 物理坐标 = 1*4 + 1 = <strong style="color:#ef4444; font-size:16px;">5</strong></div>
+                    `;
+                    log("构建 <span class='highlight'>slot_mapping</span>：一维数组精准映射。", 3);
+                    break;
+                case 4:
+                    document.getElementById('slotMappingBox').style.display = 'none';
+                    reqs['B'].state = 'SWAPPED'; reqs['B'].pool = 'CPU'; reqs['B'].table = [0];
+                    ghosts.queue.push({ q: 'running', id: 'B', text: 'Req B (4 toks)' });
+                    cpu[0] = 'B'; gpu[2] = null;
+                    ghosts.gpu[2] = 'B';
+                    log("<span class='alert'>⚠️ 触发 Swap (换出) - 条件判定：CPU Pool 有空闲块 (3/4可用)</span><br>Req C 到达但 GPU 显存不足。调度器判定 <b>CPU 空间充足</b>，将 Req B 换出至 CPU，腾出 GPU Block 2。", 4);
+                    break;
+                case 5:
+                    reqs['C'].state = 'RUNNING'; gpu[2] = 'C'; gpu[3] = 'C'; reqs['C'].table = [2, 3];
+                    log("<span class='highlight'>▶ Swap - 第2步：分配新空位</span><br>GPU Block 2 已腾空。Req C 成功分配到 Block 2 和 3。", 5);
+                    break;
+                case 6:
+                    reqs['A'].state = 'WAITING'; reqs['A'].pool = 'GPU'; reqs['A'].table = [];
+                    ghosts.queue.push({ q: 'running', id: 'A', text: 'Req A (6 toks)' });
+                    gpu[0] = null; gpu[1] = null;
+                    ghosts.gpu[0] = 'A'; ghosts.gpu[1] = 'A';
+                    log("<span class='alert'>⚠️ 触发 Recompute (重计算) - 条件判定：策略选择或 CPU 满时的降级</span><br>Req D 到达，GPU 彻底满载！系统执行 <b>Recompute 抢占策略</b>，强制驱逐 Req A，直接销毁其显存并退回 WAITING（若 CPU 满则强制此路径）。", 6);
+                    break;
+                case 7:
+                    ghosts.gpu[1] = 'A'; 
+                    reqs['D'].state = 'RUNNING'; gpu[0] = 'D'; reqs['D'].table = [0];
+                    log("<span class='highlight'>▶ Recompute - 第2步：分配新空位</span><br>Req D 成功获取到刚刚被 A 销毁腾空的 GPU Block 0。", 7);
+                    break;
+                case 8:
+                    reqs['C'].state = 'WAITING'; reqs['C'].table = []; gpu[2] = null; gpu[3] = null;
+                    ghosts.queue.push({ q: 'running', id: 'C', text: 'Req C (7 toks)' });
+                    ghosts.gpu[2] = 'C'; ghosts.gpu[3] = 'C';
+                    cpu[0] = null; gpu[2] = 'B'; reqs['B'].table = [2];
+                    ghosts.cpu[0] = 'B';
+                    reqs['B'].state = 'RUNNING'; reqs['B'].pool = 'GPU';
+                    ghosts.queue.push({ q: 'swapped', id: 'B', text: 'Req B (4 toks)' });
+                    log("Req C 推理完成退出。<span class='highlight'>♻️ 触发 Swap In (换回)</span><br>显存恢复宽裕，将 Req B 从 CPU 重新读回 GPU，并恢复其 RUNNING 状态。", 8);
+                    break;
+            }
+        }
+
+        function drawBeamsForStep(s) {
+            switch(s) {
+                case 1:
+                    setTimeout(() => {
+                        drawBeam('tag-A', 'gpu-slots-0', 'A', 'Alloc', 'alloc');
+                        drawBeam('tag-A', 'gpu-slots-1', 'A', 'Alloc', 'allocFarUp');
+                    }, 100);
+                    break;
+                case 2:
+                    setTimeout(() => {
+                        drawBeam('tag-B', 'gpu-slots-2', 'B', 'Alloc', 'alloc');
+                    }, 100);
+                    break;
+                case 3:
+                    setTimeout(() => {
+                        drawBeam('slotMappingBox', 'gpu-slots-1', 'map', 'Index: 5', 'map');
+                    }, 100);
+                    break;
+                case 4:
+                    setTimeout(() => {
+                        drawBeam('ghost-tag-B', 'tag-B', 'swap', 'Evict', 'edgeRight');
+                        drawBeam('gpu-slots-2', 'cpu-slots-0', 'swap', 'Mem Swap', 'edgeRight');
+                    }, 100);
+                    break;
+                case 5:
+                    setTimeout(() => {
+                        drawBeam('tag-C', 'gpu-slots-2', 'C', 'Blk 2', 'allocC_Blk2');
+                        drawBeam('tag-C', 'gpu-slots-3', 'C', 'Blk 3', 'allocC_Blk3');
+                    }, 100);
+                    break;
+                case 6:
+                    setTimeout(() => {
+                        drawBeam('ghost-tag-A', 'tag-A', 'recompute', 'Abort & Retry', 'verticalDropTop');
+                        flashBlock('gpu-blk-0', 'Destroyed');
+                        flashBlock('gpu-blk-1', 'Destroyed');
+                    }, 100);
+                    break;
+                case 7:
+                    setTimeout(() => {
+                        drawBeam('tag-D', 'gpu-slots-0', 'D', 'Alloc', 'allocUp');
+                    }, 100);
+                    break;
+                case 8:
+                    setTimeout(() => {
+                        drawBeam('cpu-slots-0', 'gpu-slots-2', 'swap', 'Swap In', 'edgeRight');
+                        // 【第八步专属优化】：使用 leftFlyover，从面板左侧外部绕行，绝对不穿过中间的 Req D
+                        drawBeam('ghost-tag-B', 'tag-B', 'swap', 'Restore', 'leftFlyover');
+                    }, 100);
+                    break;
+            }
+        }
+
+        function updateButtonStates() {
+            document.getElementById('btnPrev').disabled = (step <= 0);
+            document.getElementById('btnNext').disabled = (step >= 8);
+        }
+
+        function jumpToStep(targetStep) {
+            clearBeams();
+            gpu = Array(NUM_BLOCKS).fill(null); 
+            cpu = Array(NUM_BLOCKS).fill(null);
+            reqs = {
+                'A': { id: 'A', tokens: 6, state: 'WAITING', table: [], pool: 'GPU' },
+                'B': { id: 'B', tokens: 4, state: 'WAITING', table: [], pool: 'GPU' },
+                'C': { id: 'C', tokens: 7, state: 'WAITING', table: [], pool: 'GPU' },
+                'D': { id: 'D', tokens: 3, state: 'WAITING', table: [], pool: 'GPU' }
+            };
+            ghosts = { queue: [], gpu: {}, cpu: {} };
+            document.getElementById('slotMappingBox').style.display = 'none';
+            document.getElementById('logger').innerHTML = '<div>系统初始化：就绪。等待触发调度指令...</div>';
+
+            step = 0;
+            if (targetStep === 0) {
+                render();
+                updateButtonStates();
+                return;
+            }
+
+            let tempLog = log;
+            log = (msg, sNum) => {
+                const logger = document.getElementById('logger');
+                logger.innerHTML += `<div style="margin-top:5px;"><span class="log-step">[Step ${sNum}/8]</span> ${msg}</div>`;
+                logger.scrollTop = logger.scrollHeight;
+            };
+
+            for (let s = 1; s <= targetStep; s++) {
+                step = s - 1;
+                applyStepStateAndLog(s);
+                step = s;
+            }
+
+            render();
+            drawBeamsForStep(targetStep);
+            updateButtonStates();
+        }
+
+        function nextStep() {
+            if (step >= 8) return;
+            jumpToStep(step + 1);
+        }
+
+        function prevStep() {
+            if (step <= 0) return;
+            jumpToStep(step - 1);
+        }
+
+        function resetSim() { 
+            init(); 
+        }
+
+        window.onload = init;
+        window.onresize = () => { if(step > 0) { jumpToStep(step); } };
+    </script>
+</body>
+</html>
