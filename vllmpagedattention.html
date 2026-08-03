@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vLLM PagedAttention 动态模拟器</title>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --text-color: #334155;
+            --req-a-color: #3b82f6; /* Blue */
+            --req-b-color: #10b981; /* Green */
+            --free-color: #e2e8f0;
+            --border-color: #cbd5e1;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 { margin-top: 0; font-size: 24px; color: #1e293b; }
+
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 6px;
+            background-color: #1e293b;
+            color: white;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #334155; }
+        button:disabled { background-color: #94a3b8; cursor: not-allowed; }
+        button.reset { background-color: #ef4444; }
+        button.reset:hover { background-color: #dc2626; }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1.5fr;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .panel {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--border-color);
+        }
+
+        .panel h2 {
+            margin-top: 0;
+            font-size: 18px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 10px;
+            text-align: center;
+        }
+
+        /* Logical View */
+        .logical-req {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            border: 2px dashed var(--border-color);
+        }
+        .logical-req.A { border-color: var(--req-a-color); }
+        .logical-req.B { border-color: var(--req-b-color); }
+        .token-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 10px;
+        }
+        .token {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+        .token.A { background-color: var(--req-a-color); }
+        .token.B { background-color: var(--req-b-color); }
+
+        /* Block Table View */
+        .block-table { margin-bottom: 15px; }
+        .table-row {
+            display: flex;
+            margin: 5px 0;
+            align-items: center;
+        }
+        .logical-idx {
+            width: 70px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .mapping-arrow { margin: 0 10px; color: #64748b; }
+        .physical-idx {
+            padding: 4px 12px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+        }
+        .physical-idx.A { background-color: var(--req-a-color); }
+        .physical-idx.B { background-color: var(--req-b-color); }
+
+        /* Physical Pool View */
+        .pool-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }
+        .physical-block {
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            padding: 8px;
+            background-color: var(--free-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transition: all 0.3s ease;
+        }
+        .physical-block.A { border-color: var(--req-a-color); background-color: #eff6ff; }
+        .physical-block.B { border-color: var(--req-b-color); background-color: #ecfdf5; }
+        
+        .block-id {
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #475569;
+        }
+        .slots {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+            width: 100%;
+        }
+        .slot {
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 4px;
+            background-color: white;
+            border: 1px solid #cbd5e1;
+            transition: background-color 0.3s ease;
+        }
+        .slot.A { background-color: var(--req-a-color); border-color: var(--req-a-color); }
+        .slot.B { background-color: var(--req-b-color); border-color: var(--req-b-color); }
+
+        /* Logger */
+        .logger {
+            margin-top: 20px;
+            width: 100%;
+            max-width: 1200px;
+            background: #1e293b;
+            color: #a7f3d0;
+            padding: 15px;
+            border-radius: 8px;
+            height: 120px;
+            overflow-y: auto;
+            font-family: monospace;
+            box-sizing: border-box;
+            line-height: 1.5;
+        }
+        .log-entry { margin: 4px 0; }
+        .log-entry .step { color: #fbbf24; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>vLLM PagedAttention 核心原理模拟</h1>
+    
+    <div class="controls">
+        <button id="btnNext" onclick="nextStep()">下一步 (Next Step)</button>
+        <button class="reset" onclick="resetSim()">重置模拟 (Reset)</button>
+        <span style="font-weight: bold; color: #475569;">当前阶段: <span id="stepCounter">0 / 7</span></span>
+    </div>
+
+    <div class="dashboard">
+        <!-- 逻辑视图：用户视角的连续 Token -->
+        <div class="panel">
+            <h2>1. 逻辑视图 (Logical View)</h2>
+            <div id="logicalA" class="logical-req A" style="display: none;">
+                <strong>请求 A (Req A)</strong>
+                <div id="tokensA" class="token-list"></div>
+            </div>
+            <div id="logicalB" class="logical-req B" style="display: none;">
+                <strong>请求 B (Req B)</strong>
+                <div id="tokensB" class="token-list"></div>
+            </div>
+            <p style="font-size: 12px; color: #64748b; text-align: center;">用户视角中，序列总是连续增长的。</p>
+        </div>
+
+        <!-- 块表视图：虚拟到物理的映射 -->
+        <div class="panel">
+            <h2>2. 块表 (Block Table)</h2>
+            <div id="tableA" class="block-table" style="display: none;">
+                <strong style="color: var(--req-a-color);">Req A 的块表:</strong>
+                <div id="mappingA"></div>
+            </div>
+            <div id="tableB" class="block-table" style="display: none;">
+                <strong style="color: var(--req-b-color);">Req B 的块表:</strong>
+                <div id="mappingB"></div>
+            </div>
+            <p style="font-size: 12px; color: #64748b; text-align: center;">记录逻辑 Block ID 到物理 Block ID 的映射。</p>
+        </div>
+
+        <!-- 物理显存视图：实际的 GPU Block Pool -->
+        <div class="panel">
+            <h2>3. 物理显存池 (Physical Block Pool)</h2>
+            <div class="pool-grid" id="physicalPool">
+                <!-- 由 JS 动态生成 16 个 Block -->
+            </div>
+            <p style="font-size: 12px; color: #64748b; text-align: center;">Block Size = 4 Tokens。注意物理分配是不连续的！</p>
+        </div>
+    </div>
+
+    <div class="logger" id="logger">
+        <div class="log-entry">模拟器初始化完毕。点击“下一步”开始观察 PagedAttention 机制。</div>
+    </div>
+
+    <script>
+        const BLOCK_SIZE = 4;
+        const TOTAL_BLOCKS = 16;
+        
+        // 状态存储
+        let currentStep = 0;
+        let physicalBlocks = []; // { reqId: null, tokens: 0 }
+        let requests = {
+            'A': { active: false, totalTokens: 0, blockTable: [] },
+            'B': { active: false, totalTokens: 0, blockTable: [] }
+        };
+
+        // 初始化物理池
+        function initPool() {
+            physicalBlocks = [];
+            for(let i=0; i<TOTAL_BLOCKS; i++) {
+                physicalBlocks.push({ reqId: null, tokens: 0 });
+            }
+        }
+
+        // 渲染物理显存池
+        function renderPool() {
+            const container = document.getElementById('physicalPool');
+            container.innerHTML = '';
+            physicalBlocks.forEach((block, idx) => {
+                let div = document.createElement('div');
+                div.className = `physical-block ${block.reqId || ''}`;
+                
+                let title = document.createElement('div');
+                title.className = 'block-id';
+                title.innerText = `Block ${idx} ${block.reqId ? `(Req ${block.reqId})` : '(Free)'}`;
+                
+                let slots = document.createElement('div');
+                slots.className = 'slots';
+                for(let i=0; i<BLOCK_SIZE; i++) {
+                    let slot = document.createElement('div');
+                    slot.className = `slot ${i < block.tokens ? block.reqId : ''}`;
+                    slots.appendChild(slot);
+                }
+                
+                div.appendChild(title);
+                div.appendChild(slots);
+                container.appendChild(div);
+            });
+        }
+
+        // 渲染逻辑视图与块表
+        function renderLogicalAndTable() {
+            ['A', 'B'].forEach(reqId => {
+                const req = requests[reqId];
+                document.getElementById(`logical${reqId}`).style.display = req.active ? 'block' : 'none';
+                document.getElementById(`table${reqId}`).style.display = req.active && req.blockTable.length > 0 ? 'block' : 'none';
+                
+                if(!req.active) return;
+
+                // 渲染 Token
+                const tokensContainer = document.getElementById(`tokens${reqId}`);
+                tokensContainer.innerHTML = '';
+                for(let i=0; i<req.totalTokens; i++) {
+                    let t = document.createElement('div');
+                    t.className = `token ${reqId}`;
+                    tokensContainer.appendChild(t);
+                }
+
+                // 渲染 Block Table
+                const mappingContainer = document.getElementById(`mapping${reqId}`);
+                mappingContainer.innerHTML = '';
+                req.blockTable.forEach((physId, logIdx) => {
+                    let row = document.createElement('div');
+                    row.className = 'table-row';
+                    row.innerHTML = `
+                        <span class="logical-idx">Logical ${logIdx}</span>
+                        <span class="mapping-arrow">➜</span>
+                        <span class="physical-idx ${reqId}">Physical ${physId}</span>
+                    `;
+                    mappingContainer.appendChild(row);
+                });
+            });
+        }
+
+        // 打印日志
+        function log(msg, stepNum) {
+            const logger = document.getElementById('logger');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            if(stepNum !== undefined) {
+                entry.innerHTML = `<span class="step">[Step ${stepNum}]</span> ${msg}`;
+            } else {
+                entry.innerHTML = msg;
+            }
+            logger.appendChild(entry);
+            logger.scrollTop = logger.scrollHeight; // 自动滚动到底部
+        }
+
+        // 核心逻辑：分配一个新 Block
+        function allocateBlock(reqId) {
+            for(let i=0; i<TOTAL_BLOCKS; i++) {
+                if(physicalBlocks[i].reqId === null) {
+                    physicalBlocks[i].reqId = reqId;
+                    physicalBlocks[i].tokens = 0;
+                    requests[reqId].blockTable.push(i);
+                    return i;
+                }
+            }
+            return -1; // OOM
+        }
+
+        // 核心逻辑：为请求生成/添加 n 个 Token
+        function addTokens(reqId, num) {
+            let req = requests[reqId];
+            req.active = true;
+            
+            for(let i=0; i<num; i++) {
+                req.totalTokens++;
+                // 检查是否需要新 Block
+                let lastPhysIdx = req.blockTable[req.blockTable.length - 1];
+                
+                if (req.blockTable.length === 0 || physicalBlocks[lastPhysIdx].tokens === BLOCK_SIZE) {
+                    lastPhysIdx = allocateBlock(reqId);
+                }
+                // 在物理块中记录 Token
+                physicalBlocks[lastPhysIdx].tokens++;
+            }
+        }
+
+        // 核心逻辑：请求结束，释放 Block
+        function freeRequest(reqId) {
+            let req = requests[reqId];
+            req.blockTable.forEach(physIdx => {
+                physicalBlocks[physIdx].reqId = null;
+                physicalBlocks[physIdx].tokens = 0;
+            });
+            req.blockTable = [];
+            req.totalTokens = 0;
+            req.active = false;
+        }
+
+        // --- 模拟步进剧本 ---
+        function nextStep() {
+            if(currentStep >= 7) return;
+            currentStep++;
+            document.getElementById('stepCounter').innerText = `${currentStep} / 7`;
+
+            switch(currentStep) {
+                case 1:
+                    addTokens('A', 5);
+                    log("Req A 到达 (Prefill阶段)。Prompt包含 5 个 Tokens。需要分配 2 个 Physical Blocks (容量为8)。分配 Block 0 和 1。", 1);
+                    break;
+                case 2:
+                    addTokens('B', 3);
+                    log("Req B 到达 (Prefill阶段)。Prompt包含 3 个 Tokens。需要 1 个 Physical Block。分配 Block 2。", 2);
+                    break;
+                case 3:
+                    addTokens('A', 1);
+                    log("Req A Decode 阶段：生成第 6 个 Token。物理 Block 1 还有空位，无需分配新内存。", 3);
+                    break;
+                case 4:
+                    addTokens('A', 2);
+                    log("Req A Decode 阶段：连续生成第 7, 8 个 Token。此时 Block 1 正好填满 (4/4)。", 4);
+                    break;
+                case 5:
+                    addTokens('B', 2);
+                    log("Req B Decode 阶段：生成 2 个 Token。第 4 个 Token 填满 Block 2；第 5 个 Token 触发动态分配，分配新 Block 3。块表更新！", 5);
+                    break;
+                case 6:
+                    addTokens('A', 1);
+                    log("Req A Decode 阶段：生成第 9 个 Token。由于 Block 1 已满，申请新 Block。注意！分配了 Block 4，此时 Req A 的物理内存 [0, 1, 4] 是<b>不连续</b>的，这就是 PagedAttention 消除碎片的精髓！", 6);
+                    break;
+                case 7:
+                    freeRequest('A');
+                    log("Req A 推理完成。一次性释放其占用的 Block 0, 1, 4 回归空闲池。避免了显存泄漏。", 7);
+                    document.getElementById('btnNext').disabled = true;
+                    break;
+            }
+
+            renderPool();
+            renderLogicalAndTable();
+        }
+
+        function resetSim() {
+            currentStep = 0;
+            document.getElementById('stepCounter').innerText = `0 / 7`;
+            document.getElementById('btnNext').disabled = false;
+            document.getElementById('logger').innerHTML = '<div class="log-entry">模拟器已重置。</div>';
+            initPool();
+            requests = {
+                'A': { active: false, totalTokens: 0, blockTable: [] },
+                'B': { active: false, totalTokens: 0, blockTable: [] }
+            };
+            renderPool();
+            renderLogicalAndTable();
+        }
+
+        // 初始启动
+        initPool();
+        renderPool();
+    </script>
+</body>
+</html>
